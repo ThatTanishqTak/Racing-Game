@@ -59,7 +59,7 @@ namespace Powertrain
 		l_Class.lpfnWndProc = WindowProcedure;
 		l_Class.hInstance = l_Instance;
 		l_Class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-		l_Class.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+		l_Class.hbrBackground = nullptr;
 		l_Class.lpszClassName = k_ClassName;
 
 		m_ClassAtom = RegisterClassExW(&l_Class);
@@ -263,12 +263,13 @@ namespace Powertrain
 				// Silence the beep on Alt + key combinations.
 				return MAKELRESULT(0, MNC_CLOSE);
 			}
+			case WM_ERASEBKGND:
+			{
+				return 1;
+			}
 			case WM_PAINT:
 			{
-				// Until M3 there is no renderer, so validate the window or the pump spins on WM_PAINT.
-				PAINTSTRUCT l_Paint;
-				BeginPaint(windowHandle, &l_Paint);
-				EndPaint(windowHandle, &l_Paint);
+				ValidateRect(windowHandle, nullptr);
 
 				return 0;
 			}

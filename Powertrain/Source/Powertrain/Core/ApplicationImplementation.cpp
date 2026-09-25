@@ -5,6 +5,7 @@
 #include "Powertrain/Events/Event.hpp"
 #include "Powertrain/Platform/Windows/Input/WindowsInput.hpp"
 #include "Powertrain/Platform/Windows/WindowsWindow.hpp"
+#include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -22,7 +23,7 @@ namespace Powertrain
 
 	bool ApplicationImplementation::Initialize()
 	{
-		PT_CORE_INFO("Initializing application '{}'", m_Specification.Window.Title);
+		PT_CORE_INFO("Initializing application '{}'", m_Specification.Name);
 		PT_CORE_ASSERT(m_Specification.FixedUpdateRate > 0.0, "FixedUpdateRate must be positive");
 		PT_CORE_ASSERT(m_Specification.MaxFixedStepsPerFrame > 0, "MaxFixedStepsPerFrame must be positive");
 
@@ -47,7 +48,15 @@ namespace Powertrain
 			return false;
 		}
 
-		m_Context = std::make_unique<EngineContext>(*m_Window, *m_Input);
+		m_Renderer = std::make_unique<D3D12Renderer>();
+		if (!m_Renderer->Initialize(*m_Window, m_Specification.Renderer))
+		{
+			PT_CORE_ERROR("Renderer initialization failed");
+
+			return false;
+		}
+
+		m_Context = std::make_unique<EngineContext>(*m_Window, *m_Input, *m_Renderer);
 		m_Initialized = true;
 
 		for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
@@ -68,6 +77,9 @@ namespace Powertrain
 
 		while (!m_Context->IsExitRequested())
 		{
+			// Block on the swap chain before sampling input, so the frame's input is as fresh as possible
+			m_Renderer->WaitForNextFrame();
+
 			const double l_FrameTime = std::min(l_Clock.Restart(), 0.25);
 
 			m_Input->BeginFrame();
@@ -113,6 +125,23 @@ namespace Powertrain
 				l_Layer->OnUpdate(l_DeltaTime);
 			}
 
+			bool l_Rendered = m_Renderer->BeginFrame();
+			if (l_Rendered)
+			{
+				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
+				{
+					l_Layer->OnRender();
+				}
+
+				l_Rendered = m_Renderer->EndFrame();
+			}
+
+			if (!l_Rendered)
+			{
+				PT_CORE_FATAL("Rendering failed, exiting");
+				m_Context->RequestExit();
+			}
+
 			FlushPendingLayers();
 		}
 
@@ -137,6 +166,12 @@ namespace Powertrain
 		m_LayerStack.clear();
 		m_LayerInsertIndex = 0;
 		m_Context.reset();
+
+		if (m_Renderer)
+		{
+			m_Renderer->Shutdown();
+			m_Renderer.reset();
+		}
 
 		if (m_Window)
 		{
@@ -232,9 +267,10 @@ namespace Powertrain
 			return;
 		}
 
-		event.Dispatch<WindowResizeEvent>([](const WindowResizeEvent& resizeEvent)
+		event.Dispatch<WindowResizeEvent>([this](const WindowResizeEvent& resizeEvent)
 		{
 			PT_CORE_TRACE("Window resized to {}x{}", resizeEvent.Width, resizeEvent.Height);
+			m_Renderer->Resize(resizeEvent.Width, resizeEvent.Height);
 
 			return false;
 		});

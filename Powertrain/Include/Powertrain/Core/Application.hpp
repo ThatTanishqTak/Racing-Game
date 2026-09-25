@@ -1,16 +1,21 @@
 #pragma once
 
 #include "Powertrain/Layer/Layer.hpp"
+#include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/Window/Window.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace Powertrain
 {
 	struct ApplicationSpecification
 	{
+		std::string Name = "Powertrain";
+
 		WindowProperties Window;
+		RendererSettings Renderer;
 
 		double FixedUpdateRate = 240.0;
 		uint32_t MaxFixedStepsPerFrame = 24;
