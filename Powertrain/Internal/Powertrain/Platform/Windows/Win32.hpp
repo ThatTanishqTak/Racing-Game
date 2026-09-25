@@ -18,5 +18,6 @@ namespace Powertrain
 	namespace Win32
 	{
 		std::wstring ToWide(std::string_view text);
+		std::string ToNarrow(std::wstring_view text);
 	}
 }

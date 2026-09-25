@@ -1,6 +1,6 @@
 #include "Powertrain/Core/Log.hpp"
 
-#include <Windows.h>
+#include "Powertrain/Platform/Windows/Win32.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -18,12 +18,16 @@ namespace Powertrain
 			switch (source)
 			{
 				case LogSource::Core:
+				{
 					return "Core";
+				}
 				case LogSource::Client:
+				{
 					return "App";
+				}
 			}
 
-			return "?";
+			return "???";
 		}
 
 		std::string_view GetLevelName(LogLevel level)
@@ -52,7 +56,7 @@ namespace Powertrain
 				}
 			}
 
-			return "?!?!?!?!";
+			return "???";
 		}
 
 		const char* GetLevelColor(LogLevel level)
@@ -70,8 +74,8 @@ namespace Powertrain
 				case LogLevel::Warn:
 				{
 					return "\x1b[33m"; // Yellow
-
-				}case LogLevel::Error:
+				}
+				case LogLevel::Error:
 				{
 					return "\x1b[31m"; // Red
 				}
@@ -82,15 +86,6 @@ namespace Powertrain
 			}
 
 			return "\x1b[0m"; // Default
-		}
-
-		std::wstring ToWide(std::string_view text)
-		{
-			const int l_Length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-			std::wstring l_Result(static_cast<size_t>(l_Length), L'\0');
-			MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), l_Result.data(), l_Length);
-
-			return l_Result;
 		}
 
 		std::filesystem::path GetExecutableDirectory()
@@ -153,7 +148,7 @@ namespace Powertrain
 					std::fputs("\x1b[0m", stdout);
 				}
 
-				OutputDebugStringW(ToWide(l_Line).c_str());
+				OutputDebugStringW(Win32::ToWide(l_Line).c_str());
 			}
 
 		private:
