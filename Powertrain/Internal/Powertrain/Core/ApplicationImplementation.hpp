@@ -11,6 +11,7 @@ namespace Powertrain
 {
 	class Event;
 	class WindowsWindow;
+	class WindowsInput;
 
 	class ApplicationImplementation
 	{
@@ -44,6 +45,7 @@ namespace Powertrain
 		ApplicationSpecification m_Specification;
 
 		std::unique_ptr<WindowsWindow> m_Window;
+		std::unique_ptr<WindowsInput> m_Input;
 		std::unique_ptr<EngineContext> m_Context;
 
 		std::vector<std::unique_ptr<Layer>> m_LayerStack;

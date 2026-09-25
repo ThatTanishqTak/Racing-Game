@@ -9,13 +9,14 @@ namespace Powertrain
 {
 	struct WindowCloseEvent {};
 	struct WindowResizeEvent { uint32_t Width = 0; uint32_t Height = 0; };
+	struct WindowMinimizeEvent { bool Minimized = false; };
 	struct WindowFocusEvent { bool Focused = false; };
 	struct KeyEvent { KeyCode Key = KeyCode::Unknown; bool Pressed = false; bool Repeat = false; };
 	struct MouseButtonEvent { MouseButton Button = MouseButton::Left; bool Pressed = false; };
 	struct MouseScrollEvent { float Delta = 0.0f; };
 	struct GamepadConnectionEvent { uint32_t Index = 0; bool Connected = false; };
 
-	using EventData = std::variant<WindowCloseEvent, WindowResizeEvent, WindowFocusEvent, KeyEvent, MouseButtonEvent, MouseScrollEvent, GamepadConnectionEvent>;
+	using EventData = std::variant<WindowCloseEvent, WindowResizeEvent, WindowMinimizeEvent, WindowFocusEvent, KeyEvent, MouseButtonEvent, MouseScrollEvent, GamepadConnectionEvent>;
 
 	class Event
 	{

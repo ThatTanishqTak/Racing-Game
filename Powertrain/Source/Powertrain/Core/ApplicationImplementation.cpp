@@ -3,6 +3,7 @@
 #include "Powertrain/Core/Clock.hpp"
 #include "Powertrain/Core/CoreLog.hpp"
 #include "Powertrain/Events/Event.hpp"
+#include "Powertrain/Platform/Windows/Input/WindowsInput.hpp"
 #include "Powertrain/Platform/Windows/WindowsWindow.hpp"
 
 #include <algorithm>
@@ -25,15 +26,28 @@ namespace Powertrain
 		PT_CORE_ASSERT(m_Specification.FixedUpdateRate > 0.0, "FixedUpdateRate must be positive");
 		PT_CORE_ASSERT(m_Specification.MaxFixedStepsPerFrame > 0, "MaxFixedStepsPerFrame must be positive");
 
+		const EventCallback l_Callback = [this](Event& event)
+		{
+			OnEvent(event);
+		};
+
 		m_Window = std::make_unique<WindowsWindow>();
-		if (!m_Window->OnInitialize(m_Specification.Window))
+		if (!m_Window->Initialize(m_Specification.Window, l_Callback))
 		{
 			PT_CORE_ERROR("Window initialization failed");
 
 			return false;
 		}
 
-		m_Context = std::make_unique<EngineContext>(*m_Window);
+		m_Input = std::make_unique<WindowsInput>();
+		if (!m_Input->Initialize(*m_Window, l_Callback))
+		{
+			PT_CORE_ERROR("Input initialization failed");
+
+			return false;
+		}
+
+		m_Context = std::make_unique<EngineContext>(*m_Window, *m_Input);
 		m_Initialized = true;
 
 		for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
@@ -52,15 +66,27 @@ namespace Powertrain
 		Clock l_Clock;
 		m_InFrame = true;
 
-		while (!m_Context->IsExitRequested() && !m_Window->ShouldClose())
+		while (!m_Context->IsExitRequested())
 		{
 			const double l_FrameTime = std::min(l_Clock.Restart(), 0.25);
 
-			m_Window->OnUpdate();
+			m_Input->BeginFrame();
+			m_Window->PollEvents();
+			m_Input->Update(l_FrameTime);
+
+			if (m_Window->IsMinimized() && !m_Context->IsExitRequested())
+			{
+				// Sleep until the next message instead of spinning
+				m_Window->WaitForMessages();
+				l_Clock.Restart();
+
+				continue;
+			}
 
 			l_Accumulator += l_FrameTime;
 
 			uint32_t l_StepCount = 0;
+			m_Input->BeginFixedPhase();
 			while (l_Accumulator >= l_FixedStep && l_StepCount < m_Specification.MaxFixedStepsPerFrame)
 			{
 				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
@@ -68,9 +94,12 @@ namespace Powertrain
 					l_Layer->OnFixedUpdate(Timestep(l_FixedStep));
 				}
 
+				m_Input->EndFixedStep();
+
 				l_Accumulator -= l_FixedStep;
 				++l_StepCount;
 			}
+			m_Input->EndFixedPhase();
 
 			if (l_Accumulator >= l_FixedStep)
 			{
@@ -103,17 +132,23 @@ namespace Powertrain
 			}
 		}
 
+		m_Initialized = false;
+
 		m_LayerStack.clear();
 		m_LayerInsertIndex = 0;
 		m_Context.reset();
 
 		if (m_Window)
 		{
-			m_Window->OnShutdown();
+			m_Window->Shutdown();
 			m_Window.reset();
 		}
 
-		m_Initialized = false;
+		if (m_Input)
+		{
+			m_Input->Shutdown();
+			m_Input.reset();
+		}
 
 		PT_CORE_INFO("Application shut down");
 	}
@@ -192,6 +227,18 @@ namespace Powertrain
 
 	void ApplicationImplementation::OnEvent(Event& event)
 	{
+		if (!m_Initialized)
+		{
+			return;
+		}
+
+		event.Dispatch<WindowResizeEvent>([](const WindowResizeEvent& resizeEvent)
+		{
+			PT_CORE_TRACE("Window resized to {}x{}", resizeEvent.Width, resizeEvent.Height);
+
+			return false;
+		});
+
 		for (auto l_Iterator = m_LayerStack.rbegin(); l_Iterator != m_LayerStack.rend(); ++l_Iterator)
 		{
 			if (event.IsHandled())

@@ -47,14 +47,17 @@ target_compile_options(${TARGET_NAME} PRIVATE
     /MP
 )
 
+# Link libraries
 target_link_libraries(${TARGET_NAME}
     PRIVATE
         d3d12
         dxgi
         dxguid
         user32
+        xinput
 )
 
+# Compiler definitions
 target_compile_definitions(${TARGET_NAME}
     PUBLIC
         $<$<CONFIG:Debug>:PT_DEBUG>
@@ -65,6 +68,7 @@ target_compile_definitions(${TARGET_NAME}
         _UNICODE
 )
 
+# Window specific options
 target_link_options(${TARGET_NAME}
     INTERFACE
         $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
