@@ -164,11 +164,16 @@ namespace Powertrain
 			bool m_ConsoleEnabled = false;
 		};
 
-		LogSink g_LogSink;
+		LogSink& GetLogSink()
+		{
+			static LogSink s_LogSink;
+
+			return s_LogSink;
+		}
 	}
 
 	void WriteLog(LogSource source, LogLevel level, std::string_view message)
 	{
-		g_LogSink.Write(source, level, message);
+		GetLogSink().Write(source, level, message);
 	}
 }

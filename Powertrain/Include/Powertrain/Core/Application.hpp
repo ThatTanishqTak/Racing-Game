@@ -13,7 +13,7 @@ namespace Powertrain
 		WindowProperties Window;
 
 		double FixedUpdateRate = 240.0;
-		uint32_t MaxFixedStepsPerFrame = 8;
+		uint32_t MaxFixedStepsPerFrame = 24;
 	};
 
 	class ApplicationImplementation;

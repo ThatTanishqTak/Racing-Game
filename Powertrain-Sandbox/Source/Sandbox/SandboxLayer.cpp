@@ -27,12 +27,6 @@ void SandboxLayer::OnFixedUpdate(Powertrain::Timestep)
 
 void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 {
-	m_RunTime += deltaTime.Seconds();
-	if (m_RunTime >= 3.0)
-	{
-		GetContext().RequestExit();
-	}
-
 	m_ElapsedTime += deltaTime.Seconds();
 	++m_FrameCount;
 

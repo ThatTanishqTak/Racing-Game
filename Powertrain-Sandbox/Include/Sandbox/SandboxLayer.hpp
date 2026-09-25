@@ -20,5 +20,4 @@ private:
 	double m_ElapsedTime = 0.0;
 	uint32_t m_FrameCount = 0;
 	uint32_t m_TickCount = 0;
-	double m_RunTime = 0.0;
 };
