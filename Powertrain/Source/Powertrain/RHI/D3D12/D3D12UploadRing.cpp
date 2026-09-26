@@ -134,6 +134,8 @@ namespace Powertrain
 		UploadAllocation l_Allocation;
 		l_Allocation.Cpu = l_Frame.Mapped + l_Start;
 		l_Allocation.Gpu = l_Frame.GpuAddress + l_Start;
+		l_Allocation.Resource = l_Frame.Buffer.Get();
+		l_Allocation.Offset = l_Start;
 		l_Allocation.Size = size;
 
 		return l_Allocation;

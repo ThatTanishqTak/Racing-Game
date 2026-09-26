@@ -18,6 +18,10 @@ namespace
 	constexpr float k_CameraFovDegrees = 60.0f;
 	constexpr float k_CameraNearPlane = 0.1f;
 	constexpr int k_GridHalfExtent = 10;
+	constexpr float k_GroundHalfSize = 10.0f;
+
+	// Lines sit a hair above the ground plane so the depth test does not flicker between them
+	constexpr float k_GridHeight = 0.01f;
 
 	constexpr std::string_view k_SampleJson = R"({ "name": "Sandbox", "mass": 1200, "rwd": true, "gears": [3.2, 2.1, 1.5, 1.1, 0.9], "aero": { "drag": 0.32 } })";
 }
@@ -31,6 +35,7 @@ void SandboxLayer::OnAttach()
 	l_Scenes.SetActiveScene(*m_Scene);
 
 	m_Scene->AddSystem<MotionSystem>(Powertrain::SystemStage::PrePhysics);
+	CreateMeshes();
 	BuildScene();
 
 	ParseSampleJson();
@@ -43,6 +48,8 @@ void SandboxLayer::OnDetach()
 		GetContext().GetSceneManager().DestroyScene(*m_Scene);
 		m_Scene = nullptr;
 	}
+
+	DestroyMeshes();
 
 	PT_INFO("{} detached", GetName());
 }
@@ -75,7 +82,7 @@ void SandboxLayer::OnEvent(Powertrain::Event& event)
 
 		if (keyEvent.Key == Powertrain::KeyCode::F3)
 		{
-			m_ShowDebugScene = !m_ShowDebugScene;
+			m_ShowDebugOverlay = !m_ShowDebugOverlay;
 
 			return true;
 		}
@@ -94,7 +101,7 @@ void SandboxLayer::OnEvent(Powertrain::Event& event)
 		{
 			if (!m_Scene->IsAlive(m_Car))
 			{
-				BuildScene();
+				BuildCar();
 			}
 
 			return true;
@@ -156,41 +163,86 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 
 void SandboxLayer::OnRender()
 {
-	if (m_ShowDebugScene)
+	if (m_ShowDebugOverlay)
 	{
-		DrawDebugScene();
+		DrawDebugOverlay();
 	}
+}
+
+void SandboxLayer::CreateMeshes()
+{
+	Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
+
+	m_BoxMesh = l_Renderer.CreateMesh(Powertrain::MeshPrimitives::MakeBox({ 0.5f, 0.5f, 0.5f }));
+	m_SphereMesh = l_Renderer.CreateMesh(Powertrain::MeshPrimitives::MakeSphere(1.0f));
+	m_PlaneMesh = l_Renderer.CreateMesh(Powertrain::MeshPrimitives::MakePlane(k_GroundHalfSize, k_GroundHalfSize));
+
+	PT_INFO("Sandbox meshes created: box {}, sphere {}, plane {}", m_BoxMesh.IsValid(), m_SphereMesh.IsValid(), m_PlaneMesh.IsValid());
+}
+
+void SandboxLayer::DestroyMeshes()
+{
+	Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
+
+	l_Renderer.DestroyMesh(m_PlaneMesh);
+	l_Renderer.DestroyMesh(m_SphereMesh);
+	l_Renderer.DestroyMesh(m_BoxMesh);
+
+	m_PlaneMesh = Powertrain::MeshHandle();
+	m_SphereMesh = Powertrain::MeshHandle();
+	m_BoxMesh = Powertrain::MeshHandle();
 }
 
 void SandboxLayer::BuildScene()
 {
-	// A car-sized box spinning on the spot
+	// The orbit camera is an entity like anything else; UpdateCamera teleports it every frame
+	m_Camera = m_Scene->CreateEntity("Camera");
+	m_Scene->GetRegistry().Add<Powertrain::CameraComponent>(m_Camera, k_CameraFovDegrees, k_CameraNearPlane);
+	m_Scene->SetPrimaryCamera(m_Camera);
+
+	// Ground the grid sits on, so the depth test has something to hide the meshes behind
+	const Powertrain::Entity l_Ground = m_Scene->CreateEntity("Ground");
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Ground, m_PlaneMesh);
+
+	// A free-standing unit sphere bobbing slowly beside the car
+	const Powertrain::Entity l_Sphere = m_Scene->CreateEntity("Sphere");
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Sphere).Teleport({ 5.0f, 1.0f, 0.0f });
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Sphere, m_SphereMesh);
+	m_Scene->GetRegistry().Add<MotionComponent>(l_Sphere, 0.0f, 1.0f, 0.5f, 0.5f, Powertrain::Math::k_HalfPi);
+
+	BuildCar();
+
+	PT_INFO("Sandbox scene built with {} entities", m_Scene->GetRegistry().GetAliveCount());
+}
+
+void SandboxLayer::BuildCar()
+{
+	// The car root spins on the spot and stays unscaled, so its children keep their own proportions
 	m_Car = m_Scene->CreateEntity("Car");
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(m_Car).Teleport({ 0.0f, 0.7f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(m_Car, DebugShapeComponent::Kind::Box, Powertrain::Vector3{ 1.0f, 0.7f, 2.2f }, 0.0f, Powertrain::Color{ 1.0f, 0.8f, 0.2f, 1.0f });
 	m_Scene->GetRegistry().Add<MotionComponent>(m_Car, 0.8f);
+
+	// The body is the unit box stretched to car size
+	const Powertrain::Entity l_Body = m_Scene->CreateEntity("Body");
+	m_Scene->SetParent(l_Body, m_Car);
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Body).Scale = { 2.0f, 1.4f, 4.4f };
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Body, m_BoxMesh);
 
 	// A roof light that bobs in the car's frame, so it orbits with the spin and rises and falls on its own
 	const Powertrain::Entity l_RoofLight = m_Scene->CreateEntity("RoofLight");
 	m_Scene->SetParent(l_RoofLight, m_Car);
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_RoofLight).Teleport({ 0.0f, 1.0f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_RoofLight, DebugShapeComponent::Kind::Sphere, Powertrain::Vector3::Zero(), 0.25f, Powertrain::Color{ 1.0f, 0.3f, 0.3f, 1.0f });
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_RoofLight).Scale = { 0.25f, 0.25f, 0.25f };
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_RoofLight, m_SphereMesh);
 	m_Scene->GetRegistry().Add<MotionComponent>(l_RoofLight, 0.0f, 1.0f, 0.15f, 1.0f);
 
 	// A thin antenna at the rear corner spinning fast about its own axis, composed with the car's spin
 	const Powertrain::Entity l_Antenna = m_Scene->CreateEntity("Antenna");
 	m_Scene->SetParent(l_Antenna, m_Car);
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Antenna).Teleport({ 0.6f, 1.1f, -1.8f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Antenna, DebugShapeComponent::Kind::Box, Powertrain::Vector3{ 0.05f, 0.4f, 0.2f }, 0.0f, Powertrain::Color{ 0.4f, 1.0f, 0.4f, 1.0f });
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Antenna).Scale = { 0.1f, 0.8f, 0.4f };
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Antenna, m_BoxMesh);
 	m_Scene->GetRegistry().Add<MotionComponent>(l_Antenna, 4.0f);
-
-	// A free-standing sphere bobbing slowly beside the car
-	const Powertrain::Entity l_Sphere = m_Scene->CreateEntity("Sphere");
-	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Sphere).Teleport({ 5.0f, 1.0f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Sphere, DebugShapeComponent::Kind::Sphere, Powertrain::Vector3::Zero(), 1.0f, Powertrain::Color{ 0.3f, 0.9f, 1.0f, 0.8f });
-	m_Scene->GetRegistry().Add<MotionComponent>(l_Sphere, 0.0f, 1.0f, 0.5f, 0.5f, Powertrain::Math::k_HalfPi);
-
-	PT_INFO("Sandbox scene built with {} entities", m_Scene->GetRegistry().GetAliveCount());
 }
 
 void SandboxLayer::ParseSampleJson()
@@ -215,10 +267,7 @@ void SandboxLayer::UpdateCamera(Powertrain::Timestep deltaTime)
 	m_CameraYaw += k_CameraYawSpeed * l_DeltaSeconds;
 	m_CameraDistance = std::clamp(m_CameraDistance - GetContext().GetInput().GetMouseScroll() * k_CameraZoomStep, k_CameraMinDistance, k_CameraMaxDistance);
 
-	const Powertrain::Window& l_Window = GetContext().GetWindow();
-	const float l_Aspect = l_Window.GetHeight() != 0 ? static_cast<float>(l_Window.GetWidth()) / static_cast<float>(l_Window.GetHeight()) : 1.0f;
-
-	// Right-handed, +Y up, orbiting a point above the origin; reversed-Z infinite projection needs no far plane
+	// Right-handed, +Y up, orbiting a point above the origin
 	const Powertrain::Vector3 l_Eye =
 	{
 		m_CameraDistance * std::cos(k_CameraPitch) * std::cos(m_CameraYaw),
@@ -226,18 +275,20 @@ void SandboxLayer::UpdateCamera(Powertrain::Timestep deltaTime)
 		m_CameraDistance * std::cos(k_CameraPitch) * std::sin(m_CameraYaw)
 	};
 
-	const Powertrain::Matrix4 l_View = Powertrain::Matrix4::LookAt(l_Eye, { 0.0f, 1.0f, 0.0f }, Powertrain::Vector3::Up());
-	const Powertrain::Matrix4 l_Projection = Powertrain::Matrix4::Perspective(Powertrain::Math::ToRadians(k_CameraFovDegrees), l_Aspect, k_CameraNearPlane);
-
-	// Row vectors: view first, then projection
-	GetContext().GetRenderer().SetViewProjection(l_View * l_Projection);
+	// The camera entity's transform is the pose; SceneRenderer inverts it into the view and builds the projection from the
+	// CameraComponent and the swap chain aspect. Teleport sets both states so the camera never lags a tick behind
+	const Powertrain::Vector3 l_Target = { 0.0f, 1.0f, 0.0f };
+	if (m_Scene->IsAlive(m_Camera))
+	{
+		m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(m_Camera).Teleport(l_Eye, Powertrain::Quaternion::LookRotation(l_Target - l_Eye, Powertrain::Vector3::Up()));
+	}
 }
 
-void SandboxLayer::DrawDebugScene()
+void SandboxLayer::DrawDebugOverlay()
 {
 	Powertrain::DebugDraw& l_Draw = GetContext().GetRenderer().GetDebugDraw();
 
-	// Ground grid on XZ, brighter every fifth metre
+	// Ground grid on XZ just above the plane mesh, brighter every fifth metre
 	for (int l_Index = -k_GridHalfExtent; l_Index <= k_GridHalfExtent; ++l_Index)
 	{
 		const float l_Offset = static_cast<float>(l_Index);
@@ -245,27 +296,14 @@ void SandboxLayer::DrawDebugScene()
 		const bool l_Major = l_Index % 5 == 0;
 		const Powertrain::Color l_Color = l_Major ? Powertrain::Color{ 0.45f, 0.45f, 0.50f, 1.0f } : Powertrain::Color{ 0.18f, 0.18f, 0.22f, 1.0f };
 
-		l_Draw.Line({ l_Offset, 0.0f, -l_Extent }, { l_Offset, 0.0f, l_Extent }, l_Color);
-		l_Draw.Line({ -l_Extent, 0.0f, l_Offset }, { l_Extent, 0.0f, l_Offset }, l_Color);
+		l_Draw.Line({ l_Offset, k_GridHeight, -l_Extent }, { l_Offset, k_GridHeight, l_Extent }, l_Color);
+		l_Draw.Line({ -l_Extent, k_GridHeight, l_Offset }, { l_Extent, k_GridHeight, l_Offset }, l_Color);
 	}
 
 	// World axes: X red, Y green, Z blue
-	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 2.0f, 0.0f, 0.0f }, { 1.0f, 0.1f, 0.1f, 1.0f });
-	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 0.0f, 2.0f, 0.0f }, { 0.1f, 1.0f, 0.1f, 1.0f });
-	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 2.0f }, { 0.1f, 0.3f, 1.0f, 1.0f });
-
-	// Every entity with a shape, at the interpolated world transform TransformSystem wrote in PreRender
-	m_Scene->GetRegistry().Each<Powertrain::WorldTransformComponent, DebugShapeComponent>([&l_Draw](Powertrain::Entity, const Powertrain::WorldTransformComponent& world, const DebugShapeComponent& shape)
-	{
-		if (shape.Shape == DebugShapeComponent::Kind::Box)
-		{
-			l_Draw.Box(world.World, shape.HalfExtents, shape.Tint);
-		}
-		else
-		{
-			l_Draw.Sphere(world.World.GetTranslation(), shape.Radius, shape.Tint);
-		}
-	});
+	l_Draw.Arrow({ 0.0f, k_GridHeight, 0.0f }, { 2.0f, 0.0f, 0.0f }, { 1.0f, 0.1f, 0.1f, 1.0f });
+	l_Draw.Arrow({ 0.0f, k_GridHeight, 0.0f }, { 0.0f, 2.0f, 0.0f }, { 0.1f, 1.0f, 0.1f, 1.0f });
+	l_Draw.Arrow({ 0.0f, k_GridHeight, 0.0f }, { 0.0f, 0.0f, 2.0f }, { 0.1f, 0.3f, 1.0f, 1.0f });
 }
 
 void SandboxLayer::OnImGuiRender()
@@ -301,12 +339,13 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::Separator();
 
 		ImGui::Text("Draw calls %u   Triangles %u", l_Stats.DrawCalls, l_Stats.Triangles);
+		ImGui::Text("Instances %u drawn, %u culled   Meshes %u (%llu KB)", l_Stats.Instances, l_Stats.CulledInstances, l_Stats.Meshes, static_cast<unsigned long long>(l_Stats.GpuMemoryBytes / 1024));
 		ImGui::Text("Frame %llu", static_cast<unsigned long long>(l_Stats.FrameIndex));
 		ImGui::Text("Scene '%s'   Entities %u   Alpha %.2f", m_Scene->GetName().c_str(), m_Scene->GetRegistry().GetAliveCount(), m_Scene->GetInterpolationAlpha());
 		ImGui::Text("Window %ux%u, %s, VSync %s", l_Window.GetWidth(), l_Window.GetHeight(), l_Window.GetMode() == Powertrain::WindowMode::Windowed ? "windowed" : "borderless", l_Renderer.IsVSyncEnabled() ? "on" : "off");
 		ImGui::Separator();
 
-		ImGui::TextDisabled("F1 stats  F2 demo  F3 debug scene  wheel zoom  V vsync  F11 fullscreen");
+		ImGui::TextDisabled("F1 stats  F2 demo  F3 grid and axes  wheel zoom  V vsync  F11 fullscreen");
 		ImGui::TextDisabled("Delete destroys the car and its children  R rebuilds");
 	}
 	ImGui::End();

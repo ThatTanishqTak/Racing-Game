@@ -22,10 +22,13 @@ public:
 	void OnImGuiRender() override;
 
 private:
+	void CreateMeshes();
+	void DestroyMeshes();
 	void BuildScene();
+	void BuildCar();
 	void ParseSampleJson();
 	void UpdateCamera(Powertrain::Timestep deltaTime);
-	void DrawDebugScene();
+	void DrawDebugOverlay();
 	void DrawStatsPanel();
 
 private:
@@ -43,15 +46,21 @@ private:
 	std::array<float, k_FrameHistoryCount> m_FrameHistory = {};
 	size_t m_FrameHistoryOffset = 0;
 
-	// Orbit camera for the debug scene; the wheel zooms
+	// Orbit camera entity; the wheel zooms, the yaw advances every frame
 	float m_CameraYaw = 0.0f;
 	float m_CameraDistance = 14.0f;
+	Powertrain::Entity m_Camera;
 
-	// The entity scene: a spinning car-sized box with two children and a bobbing sphere beside it
+	// Unit meshes scaled through TransformComponent, so three meshes dress every entity
+	Powertrain::MeshHandle m_BoxMesh;
+	Powertrain::MeshHandle m_SphereMesh;
+	Powertrain::MeshHandle m_PlaneMesh;
+
+	// The entity scene: a ground plane, a spinning car with a body and two children, a bobbing sphere beside it
 	Powertrain::Scene* m_Scene = nullptr;
 	Powertrain::Entity m_Car;
 
 	bool m_ShowStats = true;
 	bool m_ShowDemo = false;
-	bool m_ShowDebugScene = true;
+	bool m_ShowDebugOverlay = true;
 };

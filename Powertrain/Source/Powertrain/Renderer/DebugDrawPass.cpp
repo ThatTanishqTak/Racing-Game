@@ -289,10 +289,10 @@ namespace Powertrain
 		l_Blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
 		l_Blend.LogicOp = D3D12_LOGIC_OP_NOOP;
 		l_Blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
 		l_Description.BlendState.AlphaToCoverageEnable = FALSE;
 		l_Description.BlendState.IndependentBlendEnable = FALSE;
 		l_Description.SampleMask = UINT_MAX;
-
 		l_Description.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
 		l_Description.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 		l_Description.RasterizerState.FrontCounterClockwise = FALSE;
@@ -300,18 +300,16 @@ namespace Powertrain
 		l_Description.RasterizerState.MultisampleEnable = FALSE;
 		l_Description.RasterizerState.AntialiasedLineEnable = FALSE;
 		l_Description.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-
-		// No depth until M6 gives the pass the MSAA depth target
-		l_Description.DepthStencilState.DepthEnable = FALSE;
+		l_Description.DepthStencilState.DepthEnable = TRUE;
+		l_Description.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		l_Description.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
 		l_Description.DepthStencilState.StencilEnable = FALSE;
-
-		// Vertex pulling: no input layout
 		l_Description.InputLayout = { nullptr, 0 };
 		l_Description.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
 		l_Description.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
 		l_Description.NumRenderTargets = 1;
 		l_Description.RTVFormats[0] = D3D12SwapChain::k_RtvFormat;
-		l_Description.DSVFormat = DXGI_FORMAT_UNKNOWN;
+		l_Description.DSVFormat = D3D12DepthBuffer::k_Format;
 		l_Description.SampleDesc = { 1, 0 };
 		l_Description.NodeMask = 0;
 

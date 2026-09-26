@@ -11,11 +11,12 @@ namespace Powertrain
 {
 	class D3D12Device;
 
-	// A slice of the ring: the CPU pointer is written before the list executes, the GPU address goes into a root CBV or SRV
 	struct UploadAllocation
 	{
 		void* Cpu = nullptr;
 		D3D12_GPU_VIRTUAL_ADDRESS Gpu = 0;
+		ID3D12Resource* Resource = nullptr;
+		uint64_t Offset = 0;
 		uint64_t Size = 0;
 
 		bool IsValid() const { return Cpu != nullptr; }

@@ -25,6 +25,24 @@ namespace Powertrain
 		return DXMath::StoreQuaternion(DirectX::XMQuaternionSlerp(DXMath::Load(a), DXMath::Load(b), t));
 	}
 
+	Quaternion Quaternion::LookRotation(const Vector3& forward, const Vector3& up)
+	{
+		if (forward.LengthSquared() <= Math::k_Epsilon * Math::k_Epsilon)
+		{
+			return Identity();
+		}
+
+		Vector3 l_Up = up;
+		if (Vector3::Cross(forward, up).LengthSquared() <= Math::k_Epsilon * Math::k_Epsilon)
+		{
+			l_Up = forward.Normalized().Perpendicular();
+		}
+
+		const DirectX::XMMATRIX l_View = DirectX::XMMatrixLookToRH(DirectX::XMVectorZero(), DXMath::Load(forward), DXMath::Load(l_Up));
+
+		return DXMath::StoreQuaternion(DirectX::XMQuaternionConjugate(DirectX::XMQuaternionRotationMatrix(l_View)));
+	}
+
 	Quaternion Quaternion::Inverse() const
 	{
 		return DXMath::StoreQuaternion(DirectX::XMQuaternionInverse(DXMath::Load(*this)));

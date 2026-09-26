@@ -140,7 +140,7 @@ namespace Powertrain
 			if (l_Rendered)
 			{
 				// The scene goes down first, so the layers' debug lines and the UI land on top of it
-				m_Renderer->RenderScene();
+				m_Renderer->RenderScene(m_Scenes->GetActiveScene());
 
 				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
 				{

@@ -1,15 +1,19 @@
 #pragma once
 
+#include "Powertrain/Renderer/Camera.hpp"
 #include "Powertrain/Renderer/DebugDrawPass.hpp"
 #include "Powertrain/Renderer/ForwardPass.hpp"
 #include "Powertrain/Renderer/ImGuiPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
+#include "Powertrain/Renderer/SceneRenderer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DeferredReleaseQueue.hpp"
+#include "Powertrain/RHI/D3D12/D3D12DepthBuffer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DescriptorHeap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Device.hpp"
 #include "Powertrain/RHI/D3D12/D3D12GpuTimer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12MeshStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
 #include "Powertrain/RHI/D3D12/D3D12UploadRing.hpp"
@@ -22,6 +26,7 @@
 
 namespace Powertrain
 {
+	class Scene;
 	class WindowsWindow;
 
 	class D3D12Renderer final : public Renderer
@@ -41,8 +46,8 @@ namespace Powertrain
 		bool BeginFrame();
 		bool EndFrame();
 
-		// The scene passes, before the layers' OnRender so their debug lines land on top
-		void RenderScene();
+		// Camera, culling and the scene passes for the active scene (null draws nothing)
+		void RenderScene(Scene* scene);
 
 		// Draws and clears the frame's debug lines
 		void RenderDebugDraw();
@@ -66,7 +71,6 @@ namespace Powertrain
 		bool IsVSyncEnabled() const override { return m_SwapChain.IsVSyncEnabled(); }
 		void SetClearColor(const Color& color) override { m_ClearColor = color; }
 		void SetEnvironment(const EnvironmentSettings& environment) override { m_Environment = environment; }
-		void SetViewProjection(const Matrix4& viewProjection) override { m_ViewProjection = viewProjection; }
 
 		DebugDraw& GetDebugDraw() override { return m_DebugDrawPass; }
 		const RendererStats& GetStats() const override { return m_Stats; }
@@ -86,10 +90,14 @@ namespace Powertrain
 		D3D12GpuTimer& GetGpuTimer() { return m_GpuTimer; }
 		D3D12UploadRing& GetUploadRing() { return m_UploadRing; }
 		D3D12PipelineCache& GetPipelineCache() { return m_PipelineCache; }
+		D3D12DepthBuffer& GetDepthBuffer() { return m_DepthBuffer; }
+		D3D12MeshStorage& GetMeshStorage() { return m_Meshes; }
+		const D3D12MeshStorage& GetMeshStorage() const { return m_Meshes; }
 		uint32_t GetFrameIndex() const { return m_FrameIndex; }
-		const EnvironmentSettings& GetEnvironment() const { return m_Environment; }
 
-		// Root CBV address of this frame's FrameConstants in the upload ring; zero outside a frame
+		const EnvironmentSettings& GetEnvironment() const { return m_Environment; }
+		const CameraView& GetCameraView() const { return m_CameraView; }
+
 		D3D12_GPU_VIRTUAL_ADDRESS GetFrameConstantsAddress() const { return m_FrameConstantsAddress; }
 
 	private:
@@ -107,8 +115,11 @@ namespace Powertrain
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
 		D3D12GpuTimer m_GpuTimer;
+		D3D12DepthBuffer m_DepthBuffer;
 		D3D12UploadRing m_UploadRing;
 		D3D12PipelineCache m_PipelineCache;
+		D3D12MeshStorage m_Meshes;
+		SceneRenderer m_SceneRenderer;
 		ForwardPass m_ForwardPass;
 		DebugDrawPass m_DebugDrawPass;
 		ImGuiPass m_ImGuiPass;
@@ -117,7 +128,7 @@ namespace Powertrain
 		uint32_t m_FrameTriangles = 0;
 		RendererStats m_Stats;
 		EnvironmentSettings m_Environment;
-		Matrix4 m_ViewProjection;
+		CameraView m_CameraView;
 		Color m_ClearColor;
 		D3D12_GPU_VIRTUAL_ADDRESS m_FrameConstantsAddress = 0;
 

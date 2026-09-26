@@ -4,6 +4,7 @@
 #include "Powertrain/Platform/Windows/Win32.hpp"
 #include "Powertrain/Platform/Windows/WindowsWindow.hpp"
 #include "Powertrain/Renderer/ShaderInterop.hpp"
+#include "Powertrain/Scene/Scene.hpp"
 
 namespace Powertrain
 {
@@ -92,12 +93,27 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_DepthBuffer.Initialize(m_Device, m_DsvHeap, m_SwapChain.GetWidth(), m_SwapChain.GetHeight()))
+		{
+			return false;
+		}
+
 		if (!m_UploadRing.Initialize(m_Device, k_UploadRingBytesPerFrame, "Upload Ring"))
 		{
 			return false;
 		}
 
 		if (!m_PipelineCache.Initialize(m_Device, Win32::GetExecutableDirectory() / "Shaders"))
+		{
+			return false;
+		}
+
+		if (!m_Meshes.Initialize(m_Device, m_CopyQueue, m_ResourceHeap, m_DeferredRelease))
+		{
+			return false;
+		}
+
+		if (!m_SceneRenderer.Initialize(*this))
 		{
 			return false;
 		}
@@ -118,7 +134,7 @@ namespace Powertrain
 			return false;
 		}
 
-		m_ViewProjection = Matrix4();
+		m_CameraView = CameraView();
 		m_FrameConstantsAddress = 0;
 
 		m_FrameFenceValues.fill(0);
@@ -162,8 +178,11 @@ namespace Powertrain
 		m_ImGuiPass.Shutdown();
 		m_DebugDrawPass.Shutdown();
 		m_ForwardPass.Shutdown();
+		m_SceneRenderer.Shutdown();
+		m_Meshes.Shutdown();
 		m_PipelineCache.Shutdown();
 		m_UploadRing.Shutdown();
+		m_DepthBuffer.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
 		m_ResourceHeap.Shutdown();
@@ -213,7 +232,9 @@ namespace Powertrain
 
 		// The allocator for this frame index was last used k_FramesInFlight frames ago
 		m_DirectQueue.WaitForFence(m_FrameFenceValues[m_FrameIndex]);
-		m_DeferredRelease.Release(m_DirectQueue.GetCompletedValue());
+		const uint64_t l_Completed = m_DirectQueue.GetCompletedValue();
+		m_DeferredRelease.Release(l_Completed);
+		m_Meshes.ReleaseCompleted(l_Completed);
 
 		// Same slot, same guarantee
 		m_GpuTimer.BeginFrame(m_FrameIndex);
@@ -239,10 +260,13 @@ namespace Powertrain
 		const D3D12_RESOURCE_BARRIER l_ToRenderTarget = MakeTransition(m_SwapChain.GetCurrentBuffer(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		l_List->ResourceBarrier(1, &l_ToRenderTarget);
 
+		// Colour and depth stay bound through the scene and the debug lines; EndImGuiFrame drops the depth for the UI
 		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
+		const D3D12_CPU_DESCRIPTOR_HANDLE l_Dsv = m_DepthBuffer.GetDsv();
 		const float l_Clear[4] = { m_ClearColor.R, m_ClearColor.G, m_ClearColor.B, m_ClearColor.A };
-		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, nullptr);
+		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, &l_Dsv);
 		l_List->ClearRenderTargetView(l_Rtv, l_Clear, 0, nullptr);
+		m_DepthBuffer.Clear(l_List);
 
 		D3D12_VIEWPORT l_Viewport = {};
 		l_Viewport.Width = static_cast<float>(m_SwapChain.GetWidth());
@@ -253,13 +277,6 @@ namespace Powertrain
 
 		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
 		l_List->RSSetScissorRects(1, &l_Scissor);
-
-		// Frame constants go into the ring once; every pass binds the same address at root parameter 1
-		ShaderInterop::FrameConstants l_FrameConstants = {};
-		l_FrameConstants.ViewProjection = m_ViewProjection;
-		l_FrameConstants.ViewportSize = { l_Viewport.Width, l_Viewport.Height, 1.0f / l_Viewport.Width, 1.0f / l_Viewport.Height };
-		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
-		m_FrameConstantsAddress = m_UploadRing.Upload(l_FrameConstants).Gpu;
 
 		m_FrameDrawCalls = 0;
 		m_FrameTriangles = 0;
@@ -317,7 +334,7 @@ namespace Powertrain
 		return true;
 	}
 
-	void D3D12Renderer::RenderScene()
+	void D3D12Renderer::RenderScene(Scene* scene)
 	{
 		PT_CORE_ASSERT(m_InFrame, "RenderScene called outside BeginFrame and EndFrame");
 
@@ -326,14 +343,38 @@ namespace Powertrain
 			return;
 		}
 
+		// Camera, culling and the instance upload happen on the CPU first, so the frame constants below carry this frame's view
+		m_SceneRenderer.Prepare(scene, m_SwapChain.GetWidth(), m_SwapChain.GetHeight());
+		m_CameraView = m_SceneRenderer.GetCameraView();
+
+		// Frame constants go into the ring once; every pass binds the same address at root parameter 1
+		const Vector3 l_TowardsSun = (-m_Environment.SunDirection).Normalized();
+		const float l_Width = static_cast<float>(m_SwapChain.GetWidth());
+		const float l_Height = static_cast<float>(m_SwapChain.GetHeight());
+
+		ShaderInterop::FrameConstants l_FrameConstants = {};
+		l_FrameConstants.View = m_CameraView.View;
+		l_FrameConstants.Projection = m_CameraView.Projection;
+		l_FrameConstants.ViewProjection = m_CameraView.ViewProjection;
+		l_FrameConstants.CameraPosition = { m_CameraView.Position.X, m_CameraView.Position.Y, m_CameraView.Position.Z, m_CameraView.NearPlane };
+		l_FrameConstants.SunDirection = { l_TowardsSun.X, l_TowardsSun.Y, l_TowardsSun.Z, 0.0f };
+		l_FrameConstants.ViewportSize = { l_Width, l_Height, 1.0f / l_Width, 1.0f / l_Height };
+		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
+		l_FrameConstants.FrameInfo.Y = m_SceneRenderer.GetInstanceBufferIndex();
+		m_FrameConstantsAddress = m_UploadRing.Upload(l_FrameConstants).Gpu;
+
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
 		m_GpuTimer.Begin(l_List, k_ForwardTimer);
-		m_ForwardPass.Render(l_List, m_FrameConstantsAddress);
+		m_ForwardPass.Render(l_List, m_FrameConstantsAddress, m_SceneRenderer.GetBatches());
 		m_GpuTimer.End(l_List, k_ForwardTimer);
 
 		m_FrameDrawCalls += m_ForwardPass.GetDrawCallCount();
 		m_FrameTriangles += m_ForwardPass.GetTriangleCount();
+		m_Stats.Instances = m_SceneRenderer.GetVisibleInstanceCount();
+		m_Stats.CulledInstances = m_SceneRenderer.GetCulledInstanceCount();
+		m_Stats.Meshes = m_Meshes.GetAliveCount();
+		m_Stats.GpuMemoryBytes = m_Meshes.GetGpuBytes();
 	}
 
 	void D3D12Renderer::RenderDebugDraw()
@@ -348,7 +389,7 @@ namespace Powertrain
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
 		m_GpuTimer.Begin(l_List, k_DebugDrawTimer);
-		m_DebugDrawPass.Render(l_List, m_FrameIndex, m_ViewProjection);
+		m_DebugDrawPass.Render(l_List, m_FrameIndex, m_CameraView.ViewProjection);
 		m_GpuTimer.End(l_List, k_DebugDrawTimer);
 
 		m_FrameDrawCalls += m_DebugDrawPass.GetDrawCallCount();
@@ -374,9 +415,14 @@ namespace Powertrain
 		}
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
+		// The ImGui pipeline has no depth format, so the depth view comes off before its draws
+		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
+		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, nullptr);
+
 		m_ImGuiPass.EndFrame(l_List);
 
-		// The DX12 backend binds only the SRV heap; put both heaps back so the frame ends in the state BeginFrame set up
+		// The DX12 backend binds only the SRV heap
 		ID3D12DescriptorHeap* l_Heaps[] = { m_ResourceHeap.GetHandle(), m_SamplerHeap.GetHandle() };
 		l_List->SetDescriptorHeaps(2, l_Heaps);
 
@@ -403,9 +449,10 @@ namespace Powertrain
 		// Nothing may still reference the old buffers: finish every frame, then drop what the release queue holds
 		m_DirectQueue.Flush();
 		m_DeferredRelease.Flush();
+		m_Meshes.ReleaseCompleted(m_DirectQueue.GetCompletedValue());
 		m_FrameFenceValues.fill(0);
 
-		return m_SwapChain.Resize(m_PendingWidth, m_PendingHeight);
+		return m_SwapChain.Resize(m_PendingWidth, m_PendingHeight) && m_DepthBuffer.Resize(m_PendingWidth, m_PendingHeight);
 	}
 
 	void D3D12Renderer::SetVSync(bool enabled)
@@ -420,16 +467,25 @@ namespace Powertrain
 		PT_CORE_INFO("VSync {}", enabled ? "on" : "off");
 	}
 
-	MeshHandle D3D12Renderer::CreateMesh(const MeshData&)
+	MeshHandle D3D12Renderer::CreateMesh(const MeshData& data)
 	{
-		PT_CORE_ASSERT(false, "Renderer::CreateMesh arrives with M6");
+		if (!m_Initialized || m_DeviceLost)
+		{
+			return MeshHandle();
+		}
 
-		return MeshHandle();
+		return m_Meshes.Create(data);
 	}
 
-	void D3D12Renderer::DestroyMesh(MeshHandle)
+	void D3D12Renderer::DestroyMesh(MeshHandle mesh)
 	{
-		PT_CORE_ASSERT(false, "Renderer::DestroyMesh arrives with M6");
+		if (!m_Initialized)
+		{
+			return;
+		}
+
+		// The frame being recorded signals last + 1 in EndFrame, and a Flush signals at least that, so the buffers outlive every reader
+		m_Meshes.Destroy(mesh, m_DirectQueue.GetLastSignaledValue() + 1);
 	}
 
 	TextureHandle D3D12Renderer::CreateTexture(const TextureData&)

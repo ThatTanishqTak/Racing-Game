@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Powertrain/Core/Handle.hpp"
 #include "Powertrain/ECS/Entity.hpp"
 #include "Powertrain/Math/Matrix4.hpp"
 #include "Powertrain/Math/Quaternion.hpp"
@@ -50,10 +51,17 @@ namespace Powertrain
 		Matrix4 World;
 	};
 
-	// Reversed-Z infinite projection needs no far plane
+	// Reversed-Z infinite projection needs no far plane. The entity's world matrix is the camera pose, so keep its scale at one
 	struct CameraComponent
 	{
 		float VerticalFovDegrees = 60.0f;
 		float NearPlane = 0.1f;
+	};
+
+	struct MeshRendererComponent
+	{
+		MeshHandle Mesh;
+		MaterialHandle MaterialOverride;
+		bool CastShadows = true;
 	};
 }

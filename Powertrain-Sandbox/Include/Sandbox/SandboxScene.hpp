@@ -4,21 +4,6 @@
 
 #include <cstdint>
 
-// Debug-draw stand-in for a mesh
-struct DebugShapeComponent
-{
-	enum class Kind : uint8_t
-	{
-		Box,
-		Sphere
-	};
-
-	Kind Shape = Kind::Box;
-	Powertrain::Vector3 HalfExtents = { 0.5f, 0.5f, 0.5f };
-	float Radius = 0.5f;
-	Powertrain::Color Tint;
-};
-
 // Spins about the local Y axis and bobs along it; driven at 240 Hz by MotionSystem
 struct MotionComponent
 {
