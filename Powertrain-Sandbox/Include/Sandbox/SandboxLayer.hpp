@@ -31,6 +31,8 @@ private:
 	uint32_t m_TickCount = 0;
 
 	double m_AverageFrameMilliseconds = 0.0;
+	double m_GpuTimeAccumulator = 0.0;
+	double m_AverageGpuMilliseconds = 0.0;
 	uint32_t m_FramesPerSecond = 0;
 	uint32_t m_TicksPerSecond = 0;
 	std::array<float, k_FrameHistoryCount> m_FrameHistory = {};

@@ -7,6 +7,7 @@
 #include "Powertrain/RHI/D3D12/D3D12DeferredReleaseQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DescriptorHeap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Device.hpp"
+#include "Powertrain/RHI/D3D12/D3D12GpuTimer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
 
 #include <array>
@@ -36,7 +37,7 @@ namespace Powertrain
 		bool BeginFrame();
 		bool EndFrame();
 
-		// ImGui frame, between OnRender and OnImGuiRender on the layers=
+		// ImGui frame, between OnRender and OnImGuiRender on the layers
 		void BeginImGuiFrame();
 		void EndImGuiFrame();
 
@@ -71,6 +72,7 @@ namespace Powertrain
 		D3D12DescriptorHeap& GetResourceHeap() { return m_ResourceHeap; }
 		D3D12DescriptorHeap& GetSamplerHeap() { return m_SamplerHeap; }
 		D3D12DeferredReleaseQueue& GetDeferredReleaseQueue() { return m_DeferredRelease; }
+		D3D12GpuTimer& GetGpuTimer() { return m_GpuTimer; }
 		uint32_t GetFrameIndex() const { return m_FrameIndex; }
 		const EnvironmentSettings& GetEnvironment() const { return m_Environment; }
 
@@ -88,6 +90,7 @@ namespace Powertrain
 		D3D12DescriptorHeap m_SamplerHeap;
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
+		D3D12GpuTimer m_GpuTimer;
 		ImGuiPass m_ImGuiPass;
 
 		std::unique_ptr<DebugDraw> m_DebugDraw;

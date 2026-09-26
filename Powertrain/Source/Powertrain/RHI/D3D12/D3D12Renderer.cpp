@@ -68,6 +68,11 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_GpuTimer.Initialize(m_Device, m_DirectQueue, "GPU Timer"))
+		{
+			return false;
+		}
+
 		if (!m_RtvHeap.Initialize(m_Device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, k_RtvCount, 0, false, "RTV Heap") ||
 			!m_DsvHeap.Initialize(m_Device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, k_DsvCount, 0, false, "DSV Heap") ||
 			!m_ResourceHeap.Initialize(m_Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, k_PersistentResourceCount, k_TransientResourceCountPerFrame, true, "Resource Heap") ||
@@ -132,6 +137,7 @@ namespace Powertrain
 		m_ResourceHeap.Shutdown();
 		m_DsvHeap.Shutdown();
 		m_RtvHeap.Shutdown();
+		m_GpuTimer.Shutdown();
 		m_CommandList.Shutdown();
 		m_CopyQueue.Shutdown();
 		m_DirectQueue.Shutdown();
@@ -174,9 +180,12 @@ namespace Powertrain
 			return false;
 		}
 
-		// The allocator for this frame index was last used k_FramesInFlight frames ago; make sure the GPU is done with it
+		// The allocator for this frame index was last used k_FramesInFlight frames ago
 		m_DirectQueue.WaitForFence(m_FrameFenceValues[m_FrameIndex]);
 		m_DeferredRelease.Release(m_DirectQueue.GetCompletedValue());
+
+		// Same slot, same guarantee
+		m_GpuTimer.BeginFrame(m_FrameIndex);
 
 		m_ResourceHeap.BeginFrame(m_FrameIndex);
 		m_SamplerHeap.BeginFrame(m_FrameIndex);
@@ -192,6 +201,8 @@ namespace Powertrain
 
 		ID3D12DescriptorHeap* l_Heaps[] = { m_ResourceHeap.GetHandle(), m_SamplerHeap.GetHandle() };
 		l_List->SetDescriptorHeaps(2, l_Heaps);
+
+		m_GpuTimer.Begin(l_List, D3D12GpuTimer::k_FrameTimer);
 
 		const D3D12_RESOURCE_BARRIER l_ToRenderTarget = MakeTransition(m_SwapChain.GetCurrentBuffer(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		l_List->ResourceBarrier(1, &l_ToRenderTarget);
@@ -228,8 +239,13 @@ namespace Powertrain
 			return false;
 		}
 
+		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
 		const D3D12_RESOURCE_BARRIER l_ToPresent = MakeTransition(m_SwapChain.GetCurrentBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-		m_CommandList.GetHandle()->ResourceBarrier(1, &l_ToPresent);
+		l_List->ResourceBarrier(1, &l_ToPresent);
+
+		m_GpuTimer.End(l_List, D3D12GpuTimer::k_FrameTimer);
+		m_GpuTimer.Resolve(l_List);
 
 		if (!m_CommandList.Close())
 		{
@@ -252,6 +268,7 @@ namespace Powertrain
 
 		const std::chrono::steady_clock::time_point l_Now = std::chrono::steady_clock::now();
 		m_Stats.CpuFrameMilliseconds = std::chrono::duration<double, std::milli>(l_Now - m_LastFrameEnd).count();
+		m_Stats.GpuFrameMilliseconds = m_GpuTimer.GetMilliseconds(D3D12GpuTimer::k_FrameTimer);
 		m_Stats.DrawCalls = m_FrameDrawCalls;
 		m_Stats.Triangles = m_FrameTriangles;
 		m_LastFrameEnd = l_Now;

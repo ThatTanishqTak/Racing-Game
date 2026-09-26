@@ -72,16 +72,19 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 	const Powertrain::RendererStats& l_Stats = GetContext().GetRenderer().GetStats();
 	m_FrameHistory[m_FrameHistoryOffset] = static_cast<float>(l_Stats.CpuFrameMilliseconds);
 	m_FrameHistoryOffset = (m_FrameHistoryOffset + 1) % k_FrameHistoryCount;
+	m_GpuTimeAccumulator += l_Stats.GpuFrameMilliseconds;
 
 	if (m_ElapsedTime >= 1.0)
 	{
 		m_AverageFrameMilliseconds = m_ElapsedTime * 1000.0 / m_FrameCount;
+		m_AverageGpuMilliseconds = m_GpuTimeAccumulator / m_FrameCount;
 		m_FramesPerSecond = m_FrameCount;
 		m_TicksPerSecond = m_TickCount;
 
-		PT_TRACE("{} frames, {} ticks in {:.3f} s, last frame {:.2f} ms, VSync {}", m_FrameCount, m_TickCount, m_ElapsedTime, l_Stats.CpuFrameMilliseconds, GetContext().GetRenderer().IsVSyncEnabled() ? "on" : "off");
+		PT_TRACE("{} frames, {} ticks in {:.3f} s, CPU {:.2f} ms, GPU {:.2f} ms, VSync {}", m_FrameCount, m_TickCount, m_ElapsedTime, m_AverageFrameMilliseconds, m_AverageGpuMilliseconds, GetContext().GetRenderer().IsVSyncEnabled() ? "on" : "off");
 
 		m_ElapsedTime = 0.0;
+		m_GpuTimeAccumulator = 0.0;
 		m_FrameCount = 0;
 		m_TickCount = 0;
 	}
@@ -114,7 +117,7 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::Separator();
 
 		ImGui::Text("CPU frame  %6.2f ms  (%u FPS)", m_AverageFrameMilliseconds, m_FramesPerSecond);
-		ImGui::Text("GPU frame       -- ms  (timer arrives with M4 step 2)");
+		ImGui::Text("GPU frame  %6.2f ms", m_AverageGpuMilliseconds);
 		ImGui::Text("Fixed ticks   %u / s", m_TicksPerSecond);
 		ImGui::PlotLines("##FrameTimes", m_FrameHistory.data(), static_cast<int>(k_FrameHistoryCount), static_cast<int>(m_FrameHistoryOffset), nullptr, 0.0f, 33.3f, ImVec2(240.0f, 60.0f));
 		ImGui::Separator();
