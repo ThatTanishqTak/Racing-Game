@@ -6,6 +6,8 @@
 #include "Powertrain/Renderer/ShaderInterop.hpp"
 #include "Powertrain/Scene/Scene.hpp"
 
+#include <span>
+
 namespace Powertrain
 {
 	namespace
@@ -23,6 +25,9 @@ namespace Powertrain
 		// GPU timer slots; 0 is the frame, 1 the debug lines, the scene passes take 2 onward
 		constexpr uint32_t k_DebugDrawTimer = 1;
 		constexpr uint32_t k_ForwardTimer = 2;
+
+		// Flat ambient as a fraction of the sun's brightest channel, tinted by the sky, until IBL replaces it at step 4
+		constexpr float k_AmbientFraction = 0.12f;
 
 		D3D12_RESOURCE_BARRIER MakeTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 		{
@@ -113,6 +118,21 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_Textures.Initialize(m_Device, m_CopyQueue, m_ResourceHeap, m_DeferredRelease))
+		{
+			return false;
+		}
+
+		if (!m_Materials.Initialize())
+		{
+			return false;
+		}
+
+		if (!CreateSamplers())
+		{
+			return false;
+		}
+
 		if (!m_SceneRenderer.Initialize(*this))
 		{
 			return false;
@@ -179,6 +199,9 @@ namespace Powertrain
 		m_DebugDrawPass.Shutdown();
 		m_ForwardPass.Shutdown();
 		m_SceneRenderer.Shutdown();
+		DestroySamplers();
+		m_Materials.Shutdown();
+		m_Textures.Shutdown();
 		m_Meshes.Shutdown();
 		m_PipelineCache.Shutdown();
 		m_UploadRing.Shutdown();
@@ -235,6 +258,7 @@ namespace Powertrain
 		const uint64_t l_Completed = m_DirectQueue.GetCompletedValue();
 		m_DeferredRelease.Release(l_Completed);
 		m_Meshes.ReleaseCompleted(l_Completed);
+		m_Textures.ReleaseCompleted(l_Completed);
 
 		// Same slot, same guarantee
 		m_GpuTimer.BeginFrame(m_FrameIndex);
@@ -347,8 +371,35 @@ namespace Powertrain
 		m_SceneRenderer.Prepare(scene, m_SwapChain.GetWidth(), m_SwapChain.GetHeight());
 		m_CameraView = m_SceneRenderer.GetCameraView();
 
+		// The whole material table is rebuilt into the ring every frame, so UpdateMaterial and texture destruction need no GPU-side bookkeeping
+		uint32_t l_MaterialTableIndex = UINT32_MAX;
+		const uint32_t l_MaterialCount = m_Materials.GetSlotCount();
+		const UploadAllocation l_MaterialAllocation = m_UploadRing.Allocate(static_cast<uint64_t>(l_MaterialCount) * sizeof(ShaderInterop::MaterialData));
+		if (l_MaterialAllocation.IsValid())
+		{
+			m_Materials.WriteTable(m_Textures, std::span<ShaderInterop::MaterialData>(static_cast<ShaderInterop::MaterialData*>(l_MaterialAllocation.Cpu), l_MaterialCount));
+
+			D3D12_SHADER_RESOURCE_VIEW_DESC l_View = {};
+			l_View.Format = DXGI_FORMAT_UNKNOWN;
+			l_View.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+			l_View.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			l_View.Buffer.FirstElement = l_MaterialAllocation.Offset / sizeof(ShaderInterop::MaterialData);
+			l_View.Buffer.NumElements = l_MaterialCount;
+			l_View.Buffer.StructureByteStride = sizeof(ShaderInterop::MaterialData);
+			l_View.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+			const DescriptorHandle l_Descriptor = m_ResourceHeap.AllocateTransient();
+			if (l_Descriptor.IsValid())
+			{
+				m_Device.GetHandle()->CreateShaderResourceView(l_MaterialAllocation.Resource, &l_View, l_Descriptor.CPU);
+				l_MaterialTableIndex = l_Descriptor.Index;
+			}
+		}
+
 		// Frame constants go into the ring once; every pass binds the same address at root parameter 1
-		const Vector3 l_TowardsSun = (-m_Environment.SunDirection).Normalized();
+		const SunLight& l_Sun = m_SceneRenderer.GetSun();
+		const float l_SunPeak = std::max(l_Sun.Radiance.X, std::max(l_Sun.Radiance.Y, l_Sun.Radiance.Z));
+		const float l_Ambient = k_AmbientFraction * l_SunPeak;
 		const float l_Width = static_cast<float>(m_SwapChain.GetWidth());
 		const float l_Height = static_cast<float>(m_SwapChain.GetHeight());
 
@@ -357,16 +408,22 @@ namespace Powertrain
 		l_FrameConstants.Projection = m_CameraView.Projection;
 		l_FrameConstants.ViewProjection = m_CameraView.ViewProjection;
 		l_FrameConstants.CameraPosition = { m_CameraView.Position.X, m_CameraView.Position.Y, m_CameraView.Position.Z, m_CameraView.NearPlane };
-		l_FrameConstants.SunDirection = { l_TowardsSun.X, l_TowardsSun.Y, l_TowardsSun.Z, 0.0f };
+		l_FrameConstants.SunDirection = { l_Sun.TowardsSun.X, l_Sun.TowardsSun.Y, l_Sun.TowardsSun.Z, 0.0f };
+		l_FrameConstants.SunColor = { l_Sun.Radiance.X, l_Sun.Radiance.Y, l_Sun.Radiance.Z, l_Sun.FromScene ? 1.0f : 0.0f };
+		l_FrameConstants.AmbientColor = { m_Environment.SkyTint.R * l_Ambient, m_Environment.SkyTint.G * l_Ambient, m_Environment.SkyTint.B * l_Ambient, m_Environment.Exposure };
 		l_FrameConstants.ViewportSize = { l_Width, l_Height, 1.0f / l_Width, 1.0f / l_Height };
 		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
 		l_FrameConstants.FrameInfo.Y = m_SceneRenderer.GetInstanceBufferIndex();
+		l_FrameConstants.FrameInfo.Z = l_MaterialTableIndex;
 		m_FrameConstantsAddress = m_UploadRing.Upload(l_FrameConstants).Gpu;
+
+		// Without a material table the shader would index past the heap, so the frame draws nothing rather than faulting
+		const std::span<const DrawBatch> l_Batches = l_MaterialTableIndex != UINT32_MAX ? m_SceneRenderer.GetBatches() : std::span<const DrawBatch>();
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
 		m_GpuTimer.Begin(l_List, k_ForwardTimer);
-		m_ForwardPass.Render(l_List, m_FrameConstantsAddress, m_SceneRenderer.GetBatches());
+		m_ForwardPass.Render(l_List, m_FrameConstantsAddress, l_Batches);
 		m_GpuTimer.End(l_List, k_ForwardTimer);
 
 		m_FrameDrawCalls += m_ForwardPass.GetDrawCallCount();
@@ -374,7 +431,9 @@ namespace Powertrain
 		m_Stats.Instances = m_SceneRenderer.GetVisibleInstanceCount();
 		m_Stats.CulledInstances = m_SceneRenderer.GetCulledInstanceCount();
 		m_Stats.Meshes = m_Meshes.GetAliveCount();
-		m_Stats.GpuMemoryBytes = m_Meshes.GetGpuBytes();
+		m_Stats.Textures = m_Textures.GetAliveCount();
+		m_Stats.Materials = m_Materials.GetAliveCount();
+		m_Stats.GpuMemoryBytes = m_Meshes.GetGpuBytes() + m_Textures.GetGpuBytes();
 	}
 
 	void D3D12Renderer::RenderDebugDraw()
@@ -450,6 +509,7 @@ namespace Powertrain
 		m_DirectQueue.Flush();
 		m_DeferredRelease.Flush();
 		m_Meshes.ReleaseCompleted(m_DirectQueue.GetCompletedValue());
+		m_Textures.ReleaseCompleted(m_DirectQueue.GetCompletedValue());
 		m_FrameFenceValues.fill(0);
 
 		return m_SwapChain.Resize(m_PendingWidth, m_PendingHeight) && m_DepthBuffer.Resize(m_PendingWidth, m_PendingHeight);
@@ -488,27 +548,114 @@ namespace Powertrain
 		m_Meshes.Destroy(mesh, m_DirectQueue.GetLastSignaledValue() + 1);
 	}
 
-	TextureHandle D3D12Renderer::CreateTexture(const TextureData&)
+	TextureHandle D3D12Renderer::CreateTexture(const TextureData& data)
 	{
-		PT_CORE_ASSERT(false, "Renderer::CreateTexture arrives with M6");
+		if (!m_Initialized || m_DeviceLost)
+		{
+			return TextureHandle();
+		}
 
-		return TextureHandle();
+		return m_Textures.Create(data);
 	}
 
-	void D3D12Renderer::DestroyTexture(TextureHandle)
+	void D3D12Renderer::DestroyTexture(TextureHandle texture)
 	{
-		PT_CORE_ASSERT(false, "Renderer::DestroyTexture arrives with M6");
+		if (!m_Initialized)
+		{
+			return;
+		}
+
+		// Same fence rule as meshes: the frame being recorded signals last + 1 in EndFrame
+		m_Textures.Destroy(texture, m_DirectQueue.GetLastSignaledValue() + 1);
 	}
 
-	MaterialHandle D3D12Renderer::CreateMaterial(const MaterialDescription&)
+	MaterialHandle D3D12Renderer::CreateMaterial(const MaterialDescription& description)
 	{
-		PT_CORE_ASSERT(false, "Renderer::CreateMaterial arrives with M6");
+		if (!m_Initialized)
+		{
+			return MaterialHandle();
+		}
 
-		return MaterialHandle();
+		return m_Materials.Create(description);
 	}
 
-	void D3D12Renderer::UpdateMaterial(MaterialHandle, const MaterialDescription&)
+	void D3D12Renderer::UpdateMaterial(MaterialHandle material, const MaterialDescription& description)
 	{
-		PT_CORE_ASSERT(false, "Renderer::UpdateMaterial arrives with M6");
+		if (!m_Initialized)
+		{
+			return;
+		}
+
+		m_Materials.Update(material, description);
+	}
+
+	void D3D12Renderer::DestroyMaterial(MaterialHandle material)
+	{
+		if (!m_Initialized)
+		{
+			return;
+		}
+
+		// Materials are CPU data rebuilt into the ring each frame, so nothing on the GPU outlives this call
+		m_Materials.Destroy(material);
+	}
+
+	bool D3D12Renderer::CreateSamplers()
+	{
+		std::array<D3D12_SAMPLER_DESC, ShaderInterop::k_SamplerCount> l_Descriptions = {};
+
+		for (D3D12_SAMPLER_DESC& l_Description : l_Descriptions)
+		{
+			l_Description.MipLODBias = 0.0f;
+			l_Description.MaxAnisotropy = 1;
+			l_Description.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+			l_Description.MinLOD = 0.0f;
+			l_Description.MaxLOD = D3D12_FLOAT32_MAX;
+		}
+
+		l_Descriptions[ShaderInterop::k_SamplerLinearWrap].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		l_Descriptions[ShaderInterop::k_SamplerLinearWrap].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		l_Descriptions[ShaderInterop::k_SamplerLinearWrap].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		l_Descriptions[ShaderInterop::k_SamplerLinearWrap].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+
+		l_Descriptions[ShaderInterop::k_SamplerLinearClamp].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		l_Descriptions[ShaderInterop::k_SamplerLinearClamp].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerLinearClamp].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerLinearClamp].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+		l_Descriptions[ShaderInterop::k_SamplerAnisotropicWrap].Filter = D3D12_FILTER_ANISOTROPIC;
+		l_Descriptions[ShaderInterop::k_SamplerAnisotropicWrap].MaxAnisotropy = 8;
+		l_Descriptions[ShaderInterop::k_SamplerAnisotropicWrap].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		l_Descriptions[ShaderInterop::k_SamplerAnisotropicWrap].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		l_Descriptions[ShaderInterop::k_SamplerAnisotropicWrap].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+
+		l_Descriptions[ShaderInterop::k_SamplerPointClamp].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+		// The shaders index the heap with the ShaderInterop constants, so these must be the first slots the heap hands out
+		for (uint32_t l_Index = 0; l_Index < ShaderInterop::k_SamplerCount; ++l_Index)
+		{
+			m_Samplers[l_Index] = m_SamplerHeap.Allocate();
+			if (!m_Samplers[l_Index].IsValid() || m_Samplers[l_Index].Index != l_Index)
+			{
+				PT_CORE_ERROR("Sampler slot {} landed at descriptor {}; the sampler heap must be empty when the renderer starts", l_Index, m_Samplers[l_Index].Index);
+
+				return false;
+			}
+
+			m_Device.GetHandle()->CreateSampler(&l_Descriptions[l_Index], m_Samplers[l_Index].CPU);
+		}
+
+		return true;
+	}
+
+	void D3D12Renderer::DestroySamplers()
+	{
+		for (DescriptorHandle& l_Sampler : m_Samplers)
+		{
+			m_SamplerHeap.Free(l_Sampler);
+		}
 	}
 }

@@ -13,6 +13,7 @@ namespace Powertrain
 	struct DrawBatch
 	{
 		const D3D12Mesh* Mesh = nullptr;
+		uint32_t MaterialIndex = 0;
 		uint32_t FirstInstance = 0;
 		uint32_t InstanceCount = 0;
 	};

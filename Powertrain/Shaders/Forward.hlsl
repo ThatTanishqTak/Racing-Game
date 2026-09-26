@@ -3,11 +3,16 @@
 ConstantBuffer<DrawConstants> Draw : register(b0);
 ConstantBuffer<FrameConstants> Frame : register(b1);
 
+static const float k_Pi = 3.14159265;
+static const float k_MinRoughness = 0.04;
+
 struct VertexOutput
 {
     float4 Position : SV_Position;
     float3 WorldPosition : POSITION0;
     float3 Normal : NORMAL;
+    // XYZ world tangent, W bitangent sign
+    float4 Tangent : TANGENT;
     float2 TexCoord : TEXCOORD0;
 };
 
@@ -18,25 +23,101 @@ VertexOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID
 
     const Vertex l_Vertex = l_Vertices.Load < Vertex > (vertexId * k_VertexStride);
     const InstanceData l_Instance = l_Instances[Draw.InstanceIndex + instanceId];
-    
-    const float3 l_WorldPosition = mul(float4(l_Vertex.Position, 1.0), l_Instance.World).xyz;
-    const float3 l_WorldNormal = normalize(mul(l_Vertex.Normal, (float3x3) l_Instance.World));
+    const float3x3 l_Rotation = (float3x3) l_Instance.World;
 
     VertexOutput l_Output;
-    l_Output.Position = mul(float4(l_WorldPosition, 1.0), Frame.ViewProjection);
-    l_Output.WorldPosition = l_WorldPosition;
-    l_Output.Normal = l_WorldNormal;
+    l_Output.WorldPosition = mul(float4(l_Vertex.Position, 1.0), l_Instance.World).xyz;
+    l_Output.Position = mul(float4(l_Output.WorldPosition, 1.0), Frame.ViewProjection);
+    l_Output.Normal = normalize(mul(l_Vertex.Normal, l_Rotation));
+    l_Output.Tangent = float4(normalize(mul(l_Vertex.Tangent, l_Rotation)), l_Vertex.TangentSign);
     l_Output.TexCoord = l_Vertex.TexCoord;
 
     return l_Output;
 }
 
+float DistributionGGX(float nDotH, float alpha)
+{
+    const float l_Alpha2 = alpha * alpha;
+    const float l_Denominator = nDotH * nDotH * (l_Alpha2 - 1.0) + 1.0;
+
+    return l_Alpha2 / (k_Pi * l_Denominator * l_Denominator);
+}
+
+// Height-correlated Smith visibility, already divided by 4 N.L N.V
+float VisibilitySmithGGX(float nDotV, float nDotL, float alpha)
+{
+    const float l_Alpha2 = alpha * alpha;
+    const float l_LambdaV = nDotL * sqrt(nDotV * nDotV * (1.0 - l_Alpha2) + l_Alpha2);
+    const float l_LambdaL = nDotV * sqrt(nDotL * nDotL * (1.0 - l_Alpha2) + l_Alpha2);
+
+    return 0.5 / max(l_LambdaV + l_LambdaL, 1e-5);
+}
+
+float3 FresnelSchlick(float vDotH, float3 f0)
+{
+    return f0 + (1.0 - f0) * pow(1.0 - vDotH, 5.0);
+}
+
+// ACES fit by Narkowicz; lives here until the post pass at step 5 takes over
+float3 TonemapAces(float3 color)
+{
+    return saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
+}
+
 float4 PSMain(VertexOutput input) : SV_Target
 {
-    const float3 l_Normal = normalize(input.Normal);
-    const float l_Sun = saturate(dot(l_Normal, Frame.SunDirection.xyz));
-    const float l_Ambient = 0.12 + 0.13 * saturate(l_Normal.y * 0.5 + 0.5);
-    const float3 l_Albedo = float3(0.75, 0.75, 0.75);
+    StructuredBuffer<MaterialData> l_Materials = ResourceDescriptorHeap[Frame.FrameInfo.z];
+    const MaterialData l_Material = l_Materials[Draw.MaterialIndex];
+    SamplerState l_Sampler = SamplerDescriptorHeap[k_SamplerAnisotropicWrap];
 
-    return float4(l_Albedo * (l_Sun * 0.85 + l_Ambient), 1.0);
+    Texture2D l_BaseColorTexture = ResourceDescriptorHeap[l_Material.BaseColorTexture];
+    Texture2D l_MetallicRoughnessTexture = ResourceDescriptorHeap[l_Material.MetallicRoughnessTexture];
+    Texture2D l_NormalTexture = ResourceDescriptorHeap[l_Material.NormalTexture];
+    Texture2D l_EmissiveTexture = ResourceDescriptorHeap[l_Material.EmissiveTexture];
+
+    const float4 l_BaseColor = l_Material.BaseColor * l_BaseColorTexture.Sample(l_Sampler, input.TexCoord);
+    if ((l_Material.Flags & k_MaterialFlagAlphaMask) != 0)
+    {
+        clip(l_BaseColor.a - l_Material.AlphaCutoff);
+    }
+
+    // glTF packing: roughness in G, metallic in B; the factors multiply the texture
+    const float4 l_MetallicRoughness = l_MetallicRoughnessTexture.Sample(l_Sampler, input.TexCoord);
+    const float l_Roughness = clamp(l_Material.Roughness * l_MetallicRoughness.g, k_MinRoughness, 1.0);
+    const float l_Metallic = saturate(l_Material.Metallic * l_MetallicRoughness.b);
+    const float3 l_Emissive = l_Material.Emissive.rgb * l_EmissiveTexture.Sample(l_Sampler, input.TexCoord).rgb;
+
+    // Tangent-space normal map; the bitangent sign comes from the vertex so mirrored UVs stay right
+    const float3 l_VertexNormal = normalize(input.Normal);
+    const float3 l_Tangent = normalize(input.Tangent.xyz - l_VertexNormal * dot(input.Tangent.xyz, l_VertexNormal));
+    const float3 l_Bitangent = cross(l_VertexNormal, l_Tangent) * input.Tangent.w;
+    const float3 l_TangentNormal = l_NormalTexture.Sample(l_Sampler, input.TexCoord).xyz * 2.0 - 1.0;
+    const float3 l_Normal = normalize(l_TangentNormal.x * l_Tangent + l_TangentNormal.y * l_Bitangent + l_TangentNormal.z * l_VertexNormal);
+
+    const float3 l_View = normalize(Frame.CameraPosition.xyz - input.WorldPosition);
+    const float3 l_Light = Frame.SunDirection.xyz;
+    const float3 l_Half = normalize(l_View + l_Light);
+
+    const float l_NDotV = max(dot(l_Normal, l_View), 1e-4);
+    const float l_NDotL = saturate(dot(l_Normal, l_Light));
+    const float l_NDotH = saturate(dot(l_Normal, l_Half));
+    const float l_VDotH = saturate(dot(l_View, l_Half));
+
+    const float3 l_F0 = lerp(float3(0.04, 0.04, 0.04), l_BaseColor.rgb, l_Metallic);
+    const float l_Alpha = l_Roughness * l_Roughness;
+
+    const float3 l_Fresnel = FresnelSchlick(l_VDotH, l_F0);
+    const float3 l_Specular = DistributionGGX(l_NDotH, l_Alpha) * VisibilitySmithGGX(l_NDotV, l_NDotL, l_Alpha) * l_Fresnel;
+    const float3 l_Diffuse = (1.0 - l_Fresnel) * (1.0 - l_Metallic) * l_BaseColor.rgb / k_Pi;
+
+    float3 l_Color = (l_Diffuse + l_Specular) * Frame.SunColor.rgb * l_NDotL;
+
+    // Flat ambient until the sky and IBL arrive at step 4; metals take it through F0 so they do not go black in shadow
+    l_Color += Frame.AmbientColor.rgb * (l_BaseColor.rgb * (1.0 - l_Metallic) + l_F0 * l_Metallic);
+    l_Color += l_Emissive;
+
+    // Exposure then tonemap; the sRGB render target encodes on write
+    l_Color = TonemapAces(l_Color * Frame.AmbientColor.w);
+
+    return float4(l_Color, l_BaseColor.a);
 }

@@ -2,6 +2,7 @@
 
 #include "Powertrain/Core/CoreLog.hpp"
 #include "Powertrain/Renderer/ShaderInterop.hpp"
+#include "Powertrain/RHI/D3D12/D3D12MaterialStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12MeshStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
 #include "Powertrain/Scene/Components.hpp"
@@ -61,6 +62,7 @@ namespace Powertrain
 
 		const float l_Aspect = viewportHeight != 0 ? static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight) : 1.0f;
 		ResolveCamera(scene, l_Aspect);
+		ResolveSun(scene);
 
 		if (scene == nullptr)
 		{
@@ -112,12 +114,43 @@ namespace Powertrain
 		m_Camera.Frustum = Frustum::FromViewProjection(m_Camera.ViewProjection);
 	}
 
+	void SceneRenderer::ResolveSun(Scene* scene)
+	{
+		bool l_Found = false;
+
+		if (scene != nullptr)
+		{
+			// The first light wins; the entity's -Z is where the light travels, so +Z points back towards the sun
+			scene->GetRegistry().Each<WorldTransformComponent, DirectionalLightComponent>([this, &l_Found](Entity, const WorldTransformComponent& world, const DirectionalLightComponent& light)
+			{
+				if (l_Found)
+				{
+					return;
+				}
+
+				m_Sun.TowardsSun = world.World.GetAxis(2).Normalized();
+				m_Sun.Radiance = { light.Color.R * light.Intensity, light.Color.G * light.Intensity, light.Color.B * light.Intensity };
+				m_Sun.FromScene = true;
+				l_Found = true;
+			});
+		}
+
+		if (!l_Found)
+		{
+			const EnvironmentSettings& l_Environment = m_Renderer->GetEnvironment();
+			m_Sun.TowardsSun = (-l_Environment.SunDirection).Normalized();
+			m_Sun.Radiance = { l_Environment.SunColor.R * l_Environment.SunIntensity, l_Environment.SunColor.G * l_Environment.SunIntensity, l_Environment.SunColor.B * l_Environment.SunIntensity };
+			m_Sun.FromScene = false;
+		}
+	}
+
 	void SceneRenderer::GatherInstances(Scene* scene)
 	{
 		const D3D12MeshStorage& l_Meshes = m_Renderer->GetMeshStorage();
+		const D3D12MaterialStorage& l_Materials = m_Renderer->GetMaterialStorage();
 		const Frustum& l_Frustum = m_Camera.Frustum;
 
-		scene->GetRegistry().Each<WorldTransformComponent, MeshRendererComponent>([this, &l_Meshes, &l_Frustum](Entity, const WorldTransformComponent& world, const MeshRendererComponent& meshRenderer)
+		scene->GetRegistry().Each<WorldTransformComponent, MeshRendererComponent>([this, &l_Meshes, &l_Materials, &l_Frustum](Entity, const WorldTransformComponent& world, const MeshRendererComponent& meshRenderer)
 		{
 			const D3D12Mesh* l_Mesh = l_Meshes.Get(meshRenderer.Mesh);
 			if (l_Mesh == nullptr)
@@ -132,12 +165,13 @@ namespace Powertrain
 				return;
 			}
 
-			m_Visible.push_back({ meshRenderer.Mesh.Index, l_Mesh, world.World });
+			m_Visible.push_back({ meshRenderer.Mesh.Index, l_Materials.GetSlot(meshRenderer.Material), l_Mesh, world.World });
 		});
 
+		// Same mesh and material together, so each batch is one DrawIndexedInstanced over a contiguous instance range
 		std::sort(m_Visible.begin(), m_Visible.end(), [](const VisibleInstance& a, const VisibleInstance& b)
 		{
-			return a.MeshSlot < b.MeshSlot;
+			return a.MeshSlot != b.MeshSlot ? a.MeshSlot < b.MeshSlot : a.MaterialSlot < b.MaterialSlot;
 		});
 	}
 
@@ -162,9 +196,9 @@ namespace Powertrain
 		{
 			l_Instances[l_Index].World = m_Visible[l_Index].World;
 
-			if (m_Batches.empty() || m_Batches.back().Mesh != m_Visible[l_Index].Mesh)
+			if (m_Batches.empty() || m_Batches.back().Mesh != m_Visible[l_Index].Mesh || m_Batches.back().MaterialIndex != m_Visible[l_Index].MaterialSlot)
 			{
-				m_Batches.push_back({ m_Visible[l_Index].Mesh, static_cast<uint32_t>(l_Index), 1 });
+				m_Batches.push_back({ m_Visible[l_Index].Mesh, m_Visible[l_Index].MaterialSlot, static_cast<uint32_t>(l_Index), 1 });
 			}
 			else
 			{

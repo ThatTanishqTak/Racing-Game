@@ -102,6 +102,8 @@ namespace Powertrain
 		uint32_t Instances = 0;
 		uint32_t CulledInstances = 0;
 		uint32_t Meshes = 0;
+		uint32_t Textures = 0;
+		uint32_t Materials = 0;
 		uint64_t GpuMemoryBytes = 0;
 		uint64_t FrameIndex = 0;
 	};

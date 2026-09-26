@@ -22,8 +22,8 @@ public:
 	void OnImGuiRender() override;
 
 private:
-	void CreateMeshes();
-	void DestroyMeshes();
+	void CreateResources();
+	void DestroyResources();
 	void BuildScene();
 	void BuildCar();
 	void ParseSampleJson();
@@ -56,8 +56,17 @@ private:
 	Powertrain::MeshHandle m_SphereMesh;
 	Powertrain::MeshHandle m_PlaneMesh;
 
-	// The entity scene: a ground plane, a spinning car with a body and two children, a bobbing sphere beside it
+	// A procedural checker for the ground and one material per surface
+	Powertrain::TextureHandle m_CheckerTexture;
+	Powertrain::MaterialHandle m_GroundMaterial;
+	Powertrain::MaterialHandle m_BodyMaterial;
+	Powertrain::MaterialHandle m_LightMaterial;
+	Powertrain::MaterialHandle m_AntennaMaterial;
+	Powertrain::MaterialHandle m_SphereMaterial;
+
+	// The entity scene: a sun, a ground plane, a spinning car with a body and two children, a bobbing sphere beside it
 	Powertrain::Scene* m_Scene = nullptr;
+	Powertrain::Entity m_Sun;
 	Powertrain::Entity m_Car;
 
 	bool m_ShowStats = true;

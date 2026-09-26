@@ -6,6 +6,7 @@
 #include "Powertrain/Renderer/ImGuiPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/Renderer/SceneRenderer.hpp"
+#include "Powertrain/Renderer/ShaderInterop.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DeferredReleaseQueue.hpp"
@@ -13,9 +14,11 @@
 #include "Powertrain/RHI/D3D12/D3D12DescriptorHeap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Device.hpp"
 #include "Powertrain/RHI/D3D12/D3D12GpuTimer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12MaterialStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12MeshStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
+#include "Powertrain/RHI/D3D12/D3D12TextureStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12UploadRing.hpp"
 
 #include <array>
@@ -66,6 +69,7 @@ namespace Powertrain
 		void DestroyTexture(TextureHandle texture) override;
 		MaterialHandle CreateMaterial(const MaterialDescription& description) override;
 		void UpdateMaterial(MaterialHandle material, const MaterialDescription& description) override;
+		void DestroyMaterial(MaterialHandle material) override;
 
 		void SetVSync(bool enabled) override;
 		bool IsVSyncEnabled() const override { return m_SwapChain.IsVSyncEnabled(); }
@@ -93,6 +97,10 @@ namespace Powertrain
 		D3D12DepthBuffer& GetDepthBuffer() { return m_DepthBuffer; }
 		D3D12MeshStorage& GetMeshStorage() { return m_Meshes; }
 		const D3D12MeshStorage& GetMeshStorage() const { return m_Meshes; }
+		D3D12TextureStorage& GetTextureStorage() { return m_Textures; }
+		const D3D12TextureStorage& GetTextureStorage() const { return m_Textures; }
+		D3D12MaterialStorage& GetMaterialStorage() { return m_Materials; }
+		const D3D12MaterialStorage& GetMaterialStorage() const { return m_Materials; }
 		uint32_t GetFrameIndex() const { return m_FrameIndex; }
 
 		const EnvironmentSettings& GetEnvironment() const { return m_Environment; }
@@ -102,6 +110,8 @@ namespace Powertrain
 
 	private:
 		bool ApplyPendingResize();
+		bool CreateSamplers();
+		void DestroySamplers();
 
 	private:
 		D3D12Device m_Device;
@@ -119,6 +129,9 @@ namespace Powertrain
 		D3D12UploadRing m_UploadRing;
 		D3D12PipelineCache m_PipelineCache;
 		D3D12MeshStorage m_Meshes;
+		D3D12TextureStorage m_Textures;
+		D3D12MaterialStorage m_Materials;
+		std::array<DescriptorHandle, ShaderInterop::k_SamplerCount> m_Samplers;
 		SceneRenderer m_SceneRenderer;
 		ForwardPass m_ForwardPass;
 		DebugDrawPass m_DebugDrawPass;

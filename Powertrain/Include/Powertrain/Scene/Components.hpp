@@ -5,6 +5,7 @@
 #include "Powertrain/Math/Matrix4.hpp"
 #include "Powertrain/Math/Quaternion.hpp"
 #include "Powertrain/Math/Vector3.hpp"
+#include "Powertrain/Renderer/RenderTypes.hpp"
 
 #include <string>
 
@@ -61,7 +62,14 @@ namespace Powertrain
 	struct MeshRendererComponent
 	{
 		MeshHandle Mesh;
-		MaterialHandle MaterialOverride;
+		MaterialHandle Material;
+		bool CastShadows = true;
+	};
+
+	struct DirectionalLightComponent
+	{
+		Color Color;
+		float Intensity = 10.0f;
 		bool CastShadows = true;
 	};
 }

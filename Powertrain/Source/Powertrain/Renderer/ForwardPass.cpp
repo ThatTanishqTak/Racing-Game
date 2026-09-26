@@ -82,6 +82,7 @@ namespace Powertrain
 			// The shader adds SV_InstanceID to InstanceIndex, so StartInstanceLocation stays 0 and the instance buffer index lives in the frame constants
 			ShaderInterop::DrawConstants l_Draw = {};
 			l_Draw.InstanceIndex = l_Batch.FirstInstance;
+			l_Draw.MaterialIndex = l_Batch.MaterialIndex;
 			l_Draw.VertexBufferIndex = l_Mesh.VertexView.Index;
 			commandList->SetGraphicsRoot32BitConstants(D3D12PipelineCache::k_DrawConstantsParameter, D3D12PipelineCache::k_DrawConstantCount, &l_Draw, 0);
 			commandList->IASetIndexBuffer(&l_Mesh.IndexBufferView);

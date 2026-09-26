@@ -13,6 +13,13 @@ namespace Powertrain
 	class D3D12Renderer;
 	class Scene;
 
+	struct SunLight
+	{
+		Vector3 TowardsSun = Vector3::Up();
+		Vector3 Radiance = Vector3::One();
+		bool FromScene = false;
+	};
+
 	class SceneRenderer
 	{
 	public:
@@ -27,6 +34,7 @@ namespace Powertrain
 		void Prepare(Scene* scene, uint32_t viewportWidth, uint32_t viewportHeight);
 
 		const CameraView& GetCameraView() const { return m_Camera; }
+		const SunLight& GetSun() const { return m_Sun; }
 		std::span<const DrawBatch> GetBatches() const { return m_Batches; }
 
 		uint32_t GetInstanceBufferIndex() const { return m_InstanceBufferIndex; }
@@ -37,11 +45,13 @@ namespace Powertrain
 		struct VisibleInstance
 		{
 			uint32_t MeshSlot = 0;
+			uint32_t MaterialSlot = 0;
 			const D3D12Mesh* Mesh = nullptr;
 			Matrix4 World;
 		};
 
 		void ResolveCamera(Scene* scene, float aspectRatio);
+		void ResolveSun(Scene* scene);
 		void GatherInstances(Scene* scene);
 		void UploadInstances();
 
@@ -49,6 +59,7 @@ namespace Powertrain
 		D3D12Renderer* m_Renderer = nullptr;
 
 		CameraView m_Camera;
+		SunLight m_Sun;
 		std::vector<VisibleInstance> m_Visible;
 		std::vector<DrawBatch> m_Batches;
 

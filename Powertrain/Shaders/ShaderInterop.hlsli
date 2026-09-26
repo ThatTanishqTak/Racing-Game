@@ -1,7 +1,5 @@
-// Shared between HLSL and C++ (through Internal/Renderer/ShaderInterop.hpp), so the layouts cannot drift apart. Constant structs use only float4, float4x4 and uint members: those pack identically under HLSL cbuffer rules and C++.
-
 #ifndef __cplusplus
-// Mirrors Powertrain::Vertex in RenderTypes.hpp; pulled from a ByteAddressBuffer with Load<Vertex>, which packs tightly like C++
+
 struct Vertex
 {
     float3 Position;
@@ -12,10 +10,15 @@ struct Vertex
 };
 #endif
 
-// static const rather than constexpr because HLSL has no constexpr
 static const uint k_VertexStride = 48;
+static const uint k_SamplerLinearWrap = 0;
+static const uint k_SamplerLinearClamp = 1;
+static const uint k_SamplerAnisotropicWrap = 2;
+static const uint k_SamplerPointClamp = 3;
+static const uint k_SamplerCount = 4;
 
-// Root parameter 0: 8 root constants set per draw. InstanceIndex is the first instance of the draw; the shader adds SV_InstanceID
+static const uint k_MaterialFlagAlphaMask = 1;
+
 struct DrawConstants
 {
     uint InstanceIndex;
@@ -28,24 +31,38 @@ struct DrawConstants
     uint Reserved3;
 };
 
-// One visible mesh instance, written per frame into the upload ring; PreviousWorld joins when motion vectors need it
 struct InstanceData
 {
     row_major float4x4 World;
 };
 
-// Root parameter 1: root CBV written once per frame into the upload ring
+struct MaterialData
+{
+    float4 BaseColor;
+    float4 Emissive;
+    
+    float Metallic;
+    float Roughness;
+    float AlphaCutoff;
+    
+    uint Flags;
+    uint BaseColorTexture;
+    uint MetallicRoughnessTexture;
+    uint NormalTexture;
+    uint EmissiveTexture;
+};
+
 struct FrameConstants
 {
     row_major float4x4 View;
     row_major float4x4 Projection;
     row_major float4x4 ViewProjection;
-    // XYZ camera position, W near plane
+    
     float4 CameraPosition;
-    // XYZ unit direction towards the sun, W unused
     float4 SunDirection;
-    // Width, height, 1 / width, 1 / height
+    float4 SunColor;
+    float4 AmbientColor;
     float4 ViewportSize;
-    // X frame index, Y descriptor index of this frame's StructuredBuffer<InstanceData>, Z and W padding
+    
     uint4 FrameInfo;
 };

@@ -19,6 +19,11 @@ namespace
 	constexpr float k_CameraNearPlane = 0.1f;
 	constexpr int k_GridHalfExtent = 10;
 	constexpr float k_GroundHalfSize = 10.0f;
+	constexpr uint32_t k_CheckerSize = 512;
+	constexpr uint32_t k_CheckerCell = 64;
+
+	// Where the light comes from, in the direction it travels
+	constexpr Powertrain::Vector3 k_SunDirection = { -0.3f, -1.0f, -0.2f };
 
 	// Lines sit a hair above the ground plane so the depth test does not flicker between them
 	constexpr float k_GridHeight = 0.01f;
@@ -35,7 +40,7 @@ void SandboxLayer::OnAttach()
 	l_Scenes.SetActiveScene(*m_Scene);
 
 	m_Scene->AddSystem<MotionSystem>(Powertrain::SystemStage::PrePhysics);
-	CreateMeshes();
+	CreateResources();
 	BuildScene();
 
 	ParseSampleJson();
@@ -49,7 +54,7 @@ void SandboxLayer::OnDetach()
 		m_Scene = nullptr;
 	}
 
-	DestroyMeshes();
+	DestroyResources();
 
 	PT_INFO("{} detached", GetName());
 }
@@ -169,7 +174,7 @@ void SandboxLayer::OnRender()
 	}
 }
 
-void SandboxLayer::CreateMeshes()
+void SandboxLayer::CreateResources()
 {
 	Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
 
@@ -177,17 +182,63 @@ void SandboxLayer::CreateMeshes()
 	m_SphereMesh = l_Renderer.CreateMesh(Powertrain::MeshPrimitives::MakeSphere(1.0f));
 	m_PlaneMesh = l_Renderer.CreateMesh(Powertrain::MeshPrimitives::MakePlane(k_GroundHalfSize, k_GroundHalfSize));
 
-	PT_INFO("Sandbox meshes created: box {}, sphere {}, plane {}", m_BoxMesh.IsValid(), m_SphereMesh.IsValid(), m_PlaneMesh.IsValid());
+	m_CheckerTexture = l_Renderer.CreateTexture(Powertrain::TexturePrimitives::MakeChecker(k_CheckerSize, k_CheckerCell, { 0.62f, 0.62f, 0.60f, 1.0f }, { 0.30f, 0.30f, 0.32f, 1.0f }));
+
+	// Rough asphalt under the checker
+	Powertrain::MaterialDescription l_Ground;
+	l_Ground.Roughness = 0.9f;
+	l_Ground.BaseColorTexture = m_CheckerTexture;
+	m_GroundMaterial = l_Renderer.CreateMaterial(l_Ground);
+
+	// Painted metal for the body
+	Powertrain::MaterialDescription l_Body;
+	l_Body.BaseColor = { 0.72f, 0.07f, 0.05f, 1.0f };
+	l_Body.Metallic = 0.9f;
+	l_Body.Roughness = 0.35f;
+	m_BodyMaterial = l_Renderer.CreateMaterial(l_Body);
+
+	// The roof light glows on its own
+	Powertrain::MaterialDescription l_Light;
+	l_Light.BaseColor = { 1.0f, 0.5f, 0.1f, 1.0f };
+	l_Light.Emissive = { 4.0f, 1.6f, 0.3f, 1.0f };
+	l_Light.Roughness = 0.6f;
+	m_LightMaterial = l_Renderer.CreateMaterial(l_Light);
+
+	// Dark rubber for the antenna
+	Powertrain::MaterialDescription l_Antenna;
+	l_Antenna.BaseColor = { 0.08f, 0.08f, 0.09f, 1.0f };
+	l_Antenna.Roughness = 0.7f;
+	m_AntennaMaterial = l_Renderer.CreateMaterial(l_Antenna);
+
+	// Blue plastic for the free sphere, where the GGX highlight is easiest to read
+	Powertrain::MaterialDescription l_Sphere;
+	l_Sphere.BaseColor = { 0.15f, 0.40f, 0.90f, 1.0f };
+	l_Sphere.Roughness = 0.4f;
+	m_SphereMaterial = l_Renderer.CreateMaterial(l_Sphere);
+
+	PT_INFO("Sandbox resources created: meshes {} {} {}, checker {}, materials {} {} {} {} {}", m_BoxMesh.IsValid(), m_SphereMesh.IsValid(), m_PlaneMesh.IsValid(), m_CheckerTexture.IsValid(), m_GroundMaterial.IsValid(), m_BodyMaterial.IsValid(), m_LightMaterial.IsValid(), m_AntennaMaterial.IsValid(), m_SphereMaterial.IsValid());
 }
 
-void SandboxLayer::DestroyMeshes()
+void SandboxLayer::DestroyResources()
 {
 	Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
 
+	l_Renderer.DestroyMaterial(m_SphereMaterial);
+	l_Renderer.DestroyMaterial(m_AntennaMaterial);
+	l_Renderer.DestroyMaterial(m_LightMaterial);
+	l_Renderer.DestroyMaterial(m_BodyMaterial);
+	l_Renderer.DestroyMaterial(m_GroundMaterial);
+	l_Renderer.DestroyTexture(m_CheckerTexture);
 	l_Renderer.DestroyMesh(m_PlaneMesh);
 	l_Renderer.DestroyMesh(m_SphereMesh);
 	l_Renderer.DestroyMesh(m_BoxMesh);
 
+	m_SphereMaterial = Powertrain::MaterialHandle();
+	m_AntennaMaterial = Powertrain::MaterialHandle();
+	m_LightMaterial = Powertrain::MaterialHandle();
+	m_BodyMaterial = Powertrain::MaterialHandle();
+	m_GroundMaterial = Powertrain::MaterialHandle();
+	m_CheckerTexture = Powertrain::TextureHandle();
 	m_PlaneMesh = Powertrain::MeshHandle();
 	m_SphereMesh = Powertrain::MeshHandle();
 	m_BoxMesh = Powertrain::MeshHandle();
@@ -200,14 +251,19 @@ void SandboxLayer::BuildScene()
 	m_Scene->GetRegistry().Add<Powertrain::CameraComponent>(m_Camera, k_CameraFovDegrees, k_CameraNearPlane);
 	m_Scene->SetPrimaryCamera(m_Camera);
 
+	// The sun is an entity too: it shines along its -Z, so LookRotation aims it down the travel direction
+	m_Sun = m_Scene->CreateEntity("Sun");
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(m_Sun).Teleport({ 0.0f, 10.0f, 0.0f }, Powertrain::Quaternion::LookRotation(k_SunDirection, Powertrain::Vector3::Up()));
+	m_Scene->GetRegistry().Add<Powertrain::DirectionalLightComponent>(m_Sun, Powertrain::Color{ 1.0f, 0.96f, 0.90f, 1.0f }, 8.0f);
+
 	// Ground the grid sits on, so the depth test has something to hide the meshes behind
 	const Powertrain::Entity l_Ground = m_Scene->CreateEntity("Ground");
-	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Ground, m_PlaneMesh);
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Ground, m_PlaneMesh, m_GroundMaterial);
 
 	// A free-standing unit sphere bobbing slowly beside the car
 	const Powertrain::Entity l_Sphere = m_Scene->CreateEntity("Sphere");
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Sphere).Teleport({ 5.0f, 1.0f, 0.0f });
-	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Sphere, m_SphereMesh);
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Sphere, m_SphereMesh, m_SphereMaterial);
 	m_Scene->GetRegistry().Add<MotionComponent>(l_Sphere, 0.0f, 1.0f, 0.5f, 0.5f, Powertrain::Math::k_HalfPi);
 
 	BuildCar();
@@ -226,14 +282,14 @@ void SandboxLayer::BuildCar()
 	const Powertrain::Entity l_Body = m_Scene->CreateEntity("Body");
 	m_Scene->SetParent(l_Body, m_Car);
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Body).Scale = { 2.0f, 1.4f, 4.4f };
-	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Body, m_BoxMesh);
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Body, m_BoxMesh, m_BodyMaterial);
 
 	// A roof light that bobs in the car's frame, so it orbits with the spin and rises and falls on its own
 	const Powertrain::Entity l_RoofLight = m_Scene->CreateEntity("RoofLight");
 	m_Scene->SetParent(l_RoofLight, m_Car);
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_RoofLight).Teleport({ 0.0f, 1.0f, 0.0f });
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_RoofLight).Scale = { 0.25f, 0.25f, 0.25f };
-	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_RoofLight, m_SphereMesh);
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_RoofLight, m_SphereMesh, m_LightMaterial);
 	m_Scene->GetRegistry().Add<MotionComponent>(l_RoofLight, 0.0f, 1.0f, 0.15f, 1.0f);
 
 	// A thin antenna at the rear corner spinning fast about its own axis, composed with the car's spin
@@ -241,7 +297,7 @@ void SandboxLayer::BuildCar()
 	m_Scene->SetParent(l_Antenna, m_Car);
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Antenna).Teleport({ 0.6f, 1.1f, -1.8f });
 	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Antenna).Scale = { 0.1f, 0.8f, 0.4f };
-	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Antenna, m_BoxMesh);
+	m_Scene->GetRegistry().Add<Powertrain::MeshRendererComponent>(l_Antenna, m_BoxMesh, m_AntennaMaterial);
 	m_Scene->GetRegistry().Add<MotionComponent>(l_Antenna, 4.0f);
 }
 
@@ -339,7 +395,8 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::Separator();
 
 		ImGui::Text("Draw calls %u   Triangles %u", l_Stats.DrawCalls, l_Stats.Triangles);
-		ImGui::Text("Instances %u drawn, %u culled   Meshes %u (%llu KB)", l_Stats.Instances, l_Stats.CulledInstances, l_Stats.Meshes, static_cast<unsigned long long>(l_Stats.GpuMemoryBytes / 1024));
+		ImGui::Text("Instances %u drawn, %u culled", l_Stats.Instances, l_Stats.CulledInstances);
+		ImGui::Text("Meshes %u   Textures %u   Materials %u   GPU %llu KB", l_Stats.Meshes, l_Stats.Textures, l_Stats.Materials, static_cast<unsigned long long>(l_Stats.GpuMemoryBytes / 1024));
 		ImGui::Text("Frame %llu", static_cast<unsigned long long>(l_Stats.FrameIndex));
 		ImGui::Text("Scene '%s'   Entities %u   Alpha %.2f", m_Scene->GetName().c_str(), m_Scene->GetRegistry().GetAliveCount(), m_Scene->GetInterpolationAlpha());
 		ImGui::Text("Window %ux%u, %s, VSync %s", l_Window.GetWidth(), l_Window.GetHeight(), l_Window.GetMode() == Powertrain::WindowMode::Windowed ? "windowed" : "borderless", l_Renderer.IsVSyncEnabled() ? "on" : "off");

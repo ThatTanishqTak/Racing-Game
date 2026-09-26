@@ -26,6 +26,7 @@
 #include "Powertrain/Renderer/MeshPrimitives.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/Renderer/RenderTypes.hpp"
+#include "Powertrain/Renderer/TexturePrimitives.hpp"
 #include "Powertrain/Scene/Components.hpp"
 #include "Powertrain/Scene/Scene.hpp"
 #include "Powertrain/Scene/SceneManager.hpp"

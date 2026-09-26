@@ -45,6 +45,7 @@ namespace Powertrain
 		virtual void DestroyTexture(TextureHandle texture) = 0;
 		virtual MaterialHandle CreateMaterial(const MaterialDescription& description) = 0;
 		virtual void UpdateMaterial(MaterialHandle material, const MaterialDescription& description) = 0;
+		virtual void DestroyMaterial(MaterialHandle material) = 0;
 
 		// Presentation
 		virtual void SetVSync(bool enabled) = 0;
