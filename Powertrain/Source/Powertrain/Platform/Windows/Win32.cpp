@@ -31,5 +31,18 @@ namespace Powertrain
 
 			return l_Result;
 		}
+
+		std::filesystem::path GetExecutableDirectory()
+		{
+			wchar_t l_Buffer[MAX_PATH];
+			const DWORD l_Length = GetModuleFileNameW(nullptr, l_Buffer, MAX_PATH);
+			if (l_Length == 0 || l_Length >= MAX_PATH)
+			{
+				// Truncated or failed
+				return std::filesystem::current_path();
+			}
+
+			return std::filesystem::path(l_Buffer, l_Buffer + l_Length).parent_path();
+		}
 	}
 }

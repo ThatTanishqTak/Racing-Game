@@ -1,6 +1,34 @@
 #include "Sandbox/SandboxLayer.hpp"
 
+#include <DirectXMath.h>
 #include <imgui.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+namespace
+{
+	constexpr float k_CameraPitch = DirectX::XMConvertToRadians(25.0f);
+	constexpr float k_CameraYawSpeed = 0.3f;
+	constexpr float k_CameraZoomStep = 1.0f;
+	constexpr float k_CameraMinDistance = 3.0f;
+	constexpr float k_CameraMaxDistance = 60.0f;
+	constexpr float k_BoxSpinSpeed = 0.8f;
+	constexpr int k_GridHalfExtent = 10;
+
+	// Matrix4 shares DirectXMath's row-major layout, so the store is a straight copy
+	Powertrain::Matrix4 ToMatrix4(DirectX::FXMMATRIX matrix)
+	{
+		DirectX::XMFLOAT4X4 l_Stored;
+		DirectX::XMStoreFloat4x4(&l_Stored, matrix);
+
+		Powertrain::Matrix4 l_Result;
+		std::memcpy(l_Result.M, l_Stored.m, sizeof(l_Result.M));
+
+		return l_Result;
+	}
+}
 
 void SandboxLayer::OnAttach()
 {
@@ -29,6 +57,13 @@ void SandboxLayer::OnEvent(Powertrain::Event& event)
 		if (keyEvent.Key == Powertrain::KeyCode::F2)
 		{
 			m_ShowDemo = !m_ShowDemo;
+
+			return true;
+		}
+
+		if (keyEvent.Key == Powertrain::KeyCode::F3)
+		{
+			m_ShowDebugScene = !m_ShowDebugScene;
 
 			return true;
 		}
@@ -69,6 +104,8 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 	m_ElapsedTime += deltaTime.Seconds();
 	++m_FrameCount;
 
+	UpdateCamera(deltaTime);
+
 	const Powertrain::RendererStats& l_Stats = GetContext().GetRenderer().GetStats();
 	m_FrameHistory[m_FrameHistoryOffset] = static_cast<float>(l_Stats.CpuFrameMilliseconds);
 	m_FrameHistoryOffset = (m_FrameHistoryOffset + 1) % k_FrameHistoryCount;
@@ -88,6 +125,68 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 		m_FrameCount = 0;
 		m_TickCount = 0;
 	}
+}
+
+void SandboxLayer::OnRender()
+{
+	if (m_ShowDebugScene)
+	{
+		DrawDebugScene();
+	}
+}
+
+void SandboxLayer::UpdateCamera(Powertrain::Timestep deltaTime)
+{
+	const float l_DeltaSeconds = static_cast<float>(deltaTime.Seconds());
+
+	m_CameraYaw += k_CameraYawSpeed * l_DeltaSeconds;
+	m_BoxAngle += k_BoxSpinSpeed * l_DeltaSeconds;
+	m_CameraDistance = std::clamp(m_CameraDistance - GetContext().GetInput().GetMouseScroll() * k_CameraZoomStep, k_CameraMinDistance, k_CameraMaxDistance);
+
+	const Powertrain::Window& l_Window = GetContext().GetWindow();
+	const float l_Aspect = l_Window.GetHeight() != 0 ? static_cast<float>(l_Window.GetWidth()) / static_cast<float>(l_Window.GetHeight()) : 1.0f;
+
+	// Right-handed, +Y up, orbiting the origin; the plan leans this way for M5
+	const DirectX::XMVECTOR l_Eye = DirectX::XMVectorSet(
+		m_CameraDistance * std::cos(k_CameraPitch) * std::cos(m_CameraYaw),
+		m_CameraDistance * std::sin(k_CameraPitch),
+		m_CameraDistance * std::cos(k_CameraPitch) * std::sin(m_CameraYaw),
+		1.0f);
+	const DirectX::XMVECTOR l_Target = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 1.0f);
+	const DirectX::XMVECTOR l_Up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+	const DirectX::XMMATRIX l_View = DirectX::XMMatrixLookAtRH(l_Eye, l_Target, l_Up);
+	const DirectX::XMMATRIX l_Projection = DirectX::XMMatrixPerspectiveFovRH(DirectX::XMConvertToRadians(60.0f), l_Aspect, 0.1f, 500.0f);
+
+	// Row vectors: view first, then projection
+	GetContext().GetRenderer().SetViewProjection(ToMatrix4(DirectX::XMMatrixMultiply(l_View, l_Projection)));
+}
+
+void SandboxLayer::DrawDebugScene()
+{
+	Powertrain::DebugDraw& l_Draw = GetContext().GetRenderer().GetDebugDraw();
+
+	// Ground grid on XZ, brighter every fifth metre
+	for (int l_Index = -k_GridHalfExtent; l_Index <= k_GridHalfExtent; ++l_Index)
+	{
+		const float l_Offset = static_cast<float>(l_Index);
+		const float l_Extent = static_cast<float>(k_GridHalfExtent);
+		const bool l_Major = l_Index % 5 == 0;
+		const Powertrain::Color l_Color = l_Major ? Powertrain::Color{ 0.45f, 0.45f, 0.50f, 1.0f } : Powertrain::Color{ 0.18f, 0.18f, 0.22f, 1.0f };
+
+		l_Draw.Line({ l_Offset, 0.0f, -l_Extent }, { l_Offset, 0.0f, l_Extent }, l_Color);
+		l_Draw.Line({ -l_Extent, 0.0f, l_Offset }, { l_Extent, 0.0f, l_Offset }, l_Color);
+	}
+
+	// World axes: X red, Y green, Z blue
+	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 2.0f, 0.0f, 0.0f }, { 1.0f, 0.1f, 0.1f, 1.0f });
+	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 0.0f, 2.0f, 0.0f }, { 0.1f, 1.0f, 0.1f, 1.0f });
+	l_Draw.Arrow({ 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 2.0f }, { 0.1f, 0.3f, 1.0f, 1.0f });
+
+	// A spinning car-sized box and a sphere beside it
+	const DirectX::XMMATRIX l_BoxTransform = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationY(m_BoxAngle), DirectX::XMMatrixTranslation(0.0f, 0.7f, 0.0f));
+	l_Draw.Box(ToMatrix4(l_BoxTransform), { 1.0f, 0.7f, 2.2f }, { 1.0f, 0.8f, 0.2f, 1.0f });
+	l_Draw.Sphere({ 5.0f, 1.0f, 0.0f }, 1.0f, { 0.3f, 0.9f, 1.0f, 0.8f });
 }
 
 void SandboxLayer::OnImGuiRender()
@@ -127,7 +226,7 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::Text("Window %ux%u, %s, VSync %s", l_Window.GetWidth(), l_Window.GetHeight(), l_Window.GetMode() == Powertrain::WindowMode::Windowed ? "windowed" : "borderless", l_Renderer.IsVSyncEnabled() ? "on" : "off");
 		ImGui::Separator();
 
-		ImGui::TextDisabled("F1 stats  F2 demo  V vsync  F11 fullscreen");
+		ImGui::TextDisabled("F1 stats  F2 demo  F3 debug scene  wheel zoom  V vsync  F11 fullscreen");
 	}
 	ImGui::End();
 }

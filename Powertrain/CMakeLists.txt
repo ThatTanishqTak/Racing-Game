@@ -19,6 +19,12 @@ file(GLOB_RECURSE INTERNALS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Internal/*.hpp"
 )
 
+# Collect the shaders
+file(GLOB_RECURSE SHADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.hlsli"
+)
+
 # Create the static library
 add_library(${TARGET_NAME} STATIC ${SOURCES} ${HEADERS} ${INTERNALS})
 
@@ -84,3 +90,47 @@ set_target_properties(${TARGET_NAME} PROPERTIES
     # Set C++ standard
     CXX_EXTENSIONS OFF
 )
+
+# Shader build step
+file(GLOB DXC_CANDIDATES "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/dxc.exe")
+list(SORT DXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+if(DXC_CANDIDATES)
+    list(GET DXC_CANDIDATES 0 DXC_DEFAULT)
+else()
+    set(DXC_DEFAULT "DXC_EXECUTABLE-NOTFOUND")
+endif()
+set(DXC_EXECUTABLE "${DXC_DEFAULT}" CACHE FILEPATH "Path to dxc.exe")
+if(NOT EXISTS "${DXC_EXECUTABLE}")
+    message(FATAL_ERROR "dxc.exe not found in any Windows SDK; set DXC_EXECUTABLE")
+endif()
+
+file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.hlsli")
+set(SHADER_OUTPUTS)
+
+# One entry point per call
+function(powertrain_compile_shader SOURCE PROFILE ENTRY)
+    get_filename_component(SHADER_NAME "${SOURCE}" NAME_WE)
+    set(SHADER_OUTPUT "${OUTPUT_BASE}/Shaders/${SHADER_NAME}.${ENTRY}.cso")
+
+    add_custom_command(
+        OUTPUT "${SHADER_OUTPUT}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${OUTPUT_BASE}/Shaders"
+        COMMAND "${DXC_EXECUTABLE}" -T ${PROFILE} -E ${ENTRY} -HV 2021 -WX
+                "$<IF:$<CONFIG:Debug>,-Od;-Zi;-Qembed_debug,-O3>"
+                -I "${CMAKE_CURRENT_SOURCE_DIR}/Shaders"
+                -Fo "${SHADER_OUTPUT}" "${SOURCE}"
+        DEPENDS "${SOURCE}" ${SHADER_INCLUDES}
+        COMMENT "Compiling ${SHADER_NAME}.hlsl (${ENTRY})"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+    )
+
+    set(SHADER_OUTPUTS ${SHADER_OUTPUTS} "${SHADER_OUTPUT}" PARENT_SCOPE)
+endfunction()
+
+powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/DebugLine.hlsl" vs_6_0 VSMain)
+powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/DebugLine.hlsl" ps_6_0 PSMain)
+
+add_custom_target(PowertrainShaders DEPENDS ${SHADER_OUTPUTS} SOURCES ${SHADERS})
+set_target_properties(PowertrainShaders PROPERTIES FOLDER "Utility")
+add_dependencies(${TARGET_NAME} PowertrainShaders)

@@ -14,15 +14,8 @@ namespace Powertrain
 		constexpr uint32_t k_TransientResourceCountPerFrame = 8192;
 		constexpr uint32_t k_SamplerCount = 2048;
 
-		// Draws nothing until the line batcher arrives
-		class NullDebugDraw final : public DebugDraw
-		{
-		public:
-			void Line(const Vector3&, const Vector3&, const Color&) override {}
-			void Arrow(const Vector3&, const Vector3&, const Color&) override {}
-			void Box(const Matrix4&, const Vector3&, const Color&) override {}
-			void Sphere(const Vector3&, float, const Color&) override {}
-		};
+		// GPU timer slots; 0 is the frame, the M6 passes take 2 onward
+		constexpr uint32_t k_DebugDrawTimer = 1;
 
 		D3D12_RESOURCE_BARRIER MakeTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 		{
@@ -86,12 +79,18 @@ namespace Powertrain
 			return false;
 		}
 
+		// Passes in frame order
+		if (!m_DebugDrawPass.Initialize(*this))
+		{
+			return false;
+		}
+
 		if (!m_ImGuiPass.Initialize(*this, window))
 		{
 			return false;
 		}
 
-		m_DebugDraw = std::make_unique<NullDebugDraw>();
+		m_ViewProjection = Matrix4();
 
 		m_FrameFenceValues.fill(0);
 		m_FrameIndex = 0;
@@ -132,6 +131,7 @@ namespace Powertrain
 
 		// Reverse creation order
 		m_ImGuiPass.Shutdown();
+		m_DebugDrawPass.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
 		m_ResourceHeap.Shutdown();
@@ -141,7 +141,6 @@ namespace Powertrain
 		m_CommandList.Shutdown();
 		m_CopyQueue.Shutdown();
 		m_DirectQueue.Shutdown();
-		m_DebugDraw.reset();
 		m_Device.Shutdown();
 
 		if (m_Initialized)
@@ -275,6 +274,24 @@ namespace Powertrain
 		++m_Stats.FrameIndex;
 
 		return true;
+	}
+
+	void D3D12Renderer::RenderDebugDraw()
+	{
+		PT_CORE_ASSERT(m_InFrame, "RenderDebugDraw called outside BeginFrame and EndFrame");
+
+		if (!m_InFrame)
+		{
+			return;
+		}
+
+		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
+		m_GpuTimer.Begin(l_List, k_DebugDrawTimer);
+		m_DebugDrawPass.Render(l_List, m_FrameIndex, m_ViewProjection);
+		m_GpuTimer.End(l_List, k_DebugDrawTimer);
+
+		m_FrameDrawCalls += m_DebugDrawPass.GetDrawCallCount();
 	}
 
 	void D3D12Renderer::BeginImGuiFrame()

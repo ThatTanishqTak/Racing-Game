@@ -52,6 +52,9 @@ namespace Powertrain
 		virtual void SetClearColor(const Color& color) = 0;
 		virtual void SetEnvironment(const EnvironmentSettings& environment) = 0;
 
+		// Camera for the debug lines until the scene camera arrives
+		virtual void SetViewProjection(const Matrix4& viewProjection) = 0;
+
 		// Tooling
 		virtual DebugDraw& GetDebugDraw() = 0;
 		virtual const RendererStats& GetStats() const = 0;

@@ -133,6 +133,9 @@ namespace Powertrain
 					l_Layer->OnRender();
 				}
 
+				// Debug lines gathered anywhere this frame go down before the UI
+				m_Renderer->RenderDebugDraw();
+
 				// ImGui is the last pass
 				m_Renderer->BeginImGuiFrame();
 				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)

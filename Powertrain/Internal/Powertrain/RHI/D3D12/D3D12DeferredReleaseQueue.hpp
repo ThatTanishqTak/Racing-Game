@@ -28,10 +28,10 @@ namespace Powertrain
 			}
 		}
 
-		// Releases every entry whose fence value is at or below the completed value; called once per frame
+		// Releases every entry whose fence value is at or below the completed value
 		void Release(uint64_t completedFenceValue);
 
-		// Releases everything; only valid after the owning queue has been flushed
+		// Releases everything
 		void Flush();
 
 		size_t GetPendingCount() const { return m_Entries.size(); }

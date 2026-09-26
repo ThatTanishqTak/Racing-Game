@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Powertrain/Renderer/DebugDrawPass.hpp"
 #include "Powertrain/Renderer/ImGuiPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
@@ -37,6 +38,9 @@ namespace Powertrain
 		bool BeginFrame();
 		bool EndFrame();
 
+		// Draws and clears the frame's debug lines
+		void RenderDebugDraw();
+
 		// ImGui frame, between OnRender and OnImGuiRender on the layers
 		void BeginImGuiFrame();
 		void EndImGuiFrame();
@@ -56,8 +60,9 @@ namespace Powertrain
 		bool IsVSyncEnabled() const override { return m_SwapChain.IsVSyncEnabled(); }
 		void SetClearColor(const Color& color) override { m_ClearColor = color; }
 		void SetEnvironment(const EnvironmentSettings& environment) override { m_Environment = environment; }
+		void SetViewProjection(const Matrix4& viewProjection) override { m_ViewProjection = viewProjection; }
 
-		DebugDraw& GetDebugDraw() override { return *m_DebugDraw; }
+		DebugDraw& GetDebugDraw() override { return m_DebugDrawPass; }
 		const RendererStats& GetStats() const override { return m_Stats; }
 		std::string_view GetAdapterName() const override { return m_Device.GetCapabilities().AdapterName; }
 
@@ -91,14 +96,14 @@ namespace Powertrain
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
 		D3D12GpuTimer m_GpuTimer;
+		DebugDrawPass m_DebugDrawPass;
 		ImGuiPass m_ImGuiPass;
-
-		std::unique_ptr<DebugDraw> m_DebugDraw;
 
 		uint32_t m_FrameDrawCalls = 0;
 		uint32_t m_FrameTriangles = 0;
 		RendererStats m_Stats;
 		EnvironmentSettings m_Environment;
+		Matrix4 m_ViewProjection;
 		Color m_ClearColor;
 
 		std::array<uint64_t, D3D12::k_FramesInFlight> m_FrameFenceValues = {};

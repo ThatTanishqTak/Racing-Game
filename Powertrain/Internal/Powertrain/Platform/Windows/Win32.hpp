@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -19,5 +20,8 @@ namespace Powertrain
 	{
 		std::wstring ToWide(std::string_view text);
 		std::string ToNarrow(std::wstring_view text);
+
+		// Folder of the running executable
+		std::filesystem::path GetExecutableDirectory();
 	}
 }
