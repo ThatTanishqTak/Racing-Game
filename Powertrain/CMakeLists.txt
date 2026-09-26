@@ -55,6 +55,7 @@ target_link_libraries(${TARGET_NAME}
         dxguid
         user32
         xinput
+        ImGui
 )
 
 # Compiler definitions

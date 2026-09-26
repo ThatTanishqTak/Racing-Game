@@ -23,6 +23,7 @@ namespace Powertrain
 		virtual void OnFixedUpdate(Timestep) {}
 		virtual void OnUpdate(Timestep) {}
 		virtual void OnRender() {}
+		virtual void OnImGuiRender() {}
 
 		const std::string& GetName() const { return m_Name; }
 

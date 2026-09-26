@@ -133,6 +133,14 @@ namespace Powertrain
 					l_Layer->OnRender();
 				}
 
+				// ImGui is the last pass
+				m_Renderer->BeginImGuiFrame();
+				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
+				{
+					l_Layer->OnImGuiRender();
+				}
+				m_Renderer->EndImGuiFrame();
+
 				l_Rendered = m_Renderer->EndFrame();
 			}
 

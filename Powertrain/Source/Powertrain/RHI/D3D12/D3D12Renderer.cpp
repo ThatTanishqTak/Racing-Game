@@ -81,10 +81,17 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_ImGuiPass.Initialize(*this, window))
+		{
+			return false;
+		}
+
 		m_DebugDraw = std::make_unique<NullDebugDraw>();
 
 		m_FrameFenceValues.fill(0);
 		m_FrameIndex = 0;
+		m_FrameDrawCalls = 0;
+		m_FrameTriangles = 0;
 		m_Stats = RendererStats();
 		m_LastFrameEnd = std::chrono::steady_clock::now();
 		m_ResizePending = false;
@@ -118,7 +125,8 @@ namespace Powertrain
 
 		m_DeferredRelease.Flush();
 
-		// Reverse creation order; the device goes last so its live-object report sees an empty world
+		// Reverse creation order
+		m_ImGuiPass.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
 		m_ResourceHeap.Shutdown();
@@ -203,8 +211,8 @@ namespace Powertrain
 		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
 		l_List->RSSetScissorRects(1, &l_Scissor);
 
-		m_Stats.DrawCalls = 0;
-		m_Stats.Triangles = 0;
+		m_FrameDrawCalls = 0;
+		m_FrameTriangles = 0;
 		m_InFrame = true;
 
 		return true;
@@ -244,10 +252,42 @@ namespace Powertrain
 
 		const std::chrono::steady_clock::time_point l_Now = std::chrono::steady_clock::now();
 		m_Stats.CpuFrameMilliseconds = std::chrono::duration<double, std::milli>(l_Now - m_LastFrameEnd).count();
+		m_Stats.DrawCalls = m_FrameDrawCalls;
+		m_Stats.Triangles = m_FrameTriangles;
 		m_LastFrameEnd = l_Now;
 		++m_Stats.FrameIndex;
 
 		return true;
+	}
+
+	void D3D12Renderer::BeginImGuiFrame()
+	{
+		PT_CORE_ASSERT(m_InFrame, "BeginImGuiFrame called outside BeginFrame and EndFrame");
+
+		if (!m_InFrame)
+		{
+			return;
+		}
+
+		m_ImGuiPass.BeginFrame();
+	}
+
+	void D3D12Renderer::EndImGuiFrame()
+	{
+		if (!m_InFrame)
+		{
+			return;
+		}
+
+		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+		m_ImGuiPass.EndFrame(l_List);
+
+		// The DX12 backend binds only the SRV heap; put both heaps back so the frame ends in the state BeginFrame set up
+		ID3D12DescriptorHeap* l_Heaps[] = { m_ResourceHeap.GetHandle(), m_SamplerHeap.GetHandle() };
+		l_List->SetDescriptorHeaps(2, l_Heaps);
+
+		m_FrameDrawCalls += m_ImGuiPass.GetDrawCallCount();
+		m_FrameTriangles += m_ImGuiPass.GetTriangleCount();
 	}
 
 	void D3D12Renderer::Resize(uint32_t width, uint32_t height)

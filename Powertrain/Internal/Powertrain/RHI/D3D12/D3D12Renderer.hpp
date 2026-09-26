@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Powertrain/Renderer/ImGuiPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandQueue.hpp"
@@ -34,6 +35,10 @@ namespace Powertrain
 		void WaitForNextFrame();
 		bool BeginFrame();
 		bool EndFrame();
+
+		// ImGui frame, between OnRender and OnImGuiRender on the layers=
+		void BeginImGuiFrame();
+		void EndImGuiFrame();
 
 		// Deferred to the next BeginFrame, so it is safe from any layer hook
 		void Resize(uint32_t width, uint32_t height);
@@ -83,8 +88,12 @@ namespace Powertrain
 		D3D12DescriptorHeap m_SamplerHeap;
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
+		ImGuiPass m_ImGuiPass;
 
 		std::unique_ptr<DebugDraw> m_DebugDraw;
+
+		uint32_t m_FrameDrawCalls = 0;
+		uint32_t m_FrameTriangles = 0;
 		RendererStats m_Stats;
 		EnvironmentSettings m_Environment;
 		Color m_ClearColor;

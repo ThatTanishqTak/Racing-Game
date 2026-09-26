@@ -1,5 +1,7 @@
 #include "Sandbox/SandboxLayer.hpp"
 
+#include <imgui.h>
+
 void SandboxLayer::OnAttach()
 {
 	PT_INFO("{} ATTACHED", GetName());
@@ -11,9 +13,24 @@ void SandboxLayer::OnEvent(Powertrain::Event& event)
 	{
 		PT_INFO("Key 0x{:02X} {}", static_cast<uint16_t>(keyEvent.Key), keyEvent.Pressed ? "pressed" : "released");
 
-		if (!keyEvent.Pressed || keyEvent.Repeat)
+		// A focused text field owns the keyboard, so the toggles below must not fire while typing into a panel
+		if (!keyEvent.Pressed || keyEvent.Repeat || ImGui::GetIO().WantCaptureKeyboard)
 		{
 			return false;
+		}
+
+		if (keyEvent.Key == Powertrain::KeyCode::F1)
+		{
+			m_ShowStats = !m_ShowStats;
+
+			return true;
+		}
+
+		if (keyEvent.Key == Powertrain::KeyCode::F2)
+		{
+			m_ShowDemo = !m_ShowDemo;
+
+			return true;
 		}
 
 		if (keyEvent.Key == Powertrain::KeyCode::V)
@@ -52,13 +69,62 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 	m_ElapsedTime += deltaTime.Seconds();
 	++m_FrameCount;
 
+	const Powertrain::RendererStats& l_Stats = GetContext().GetRenderer().GetStats();
+	m_FrameHistory[m_FrameHistoryOffset] = static_cast<float>(l_Stats.CpuFrameMilliseconds);
+	m_FrameHistoryOffset = (m_FrameHistoryOffset + 1) % k_FrameHistoryCount;
+
 	if (m_ElapsedTime >= 1.0)
 	{
-		const Powertrain::RendererStats& l_Stats = GetContext().GetRenderer().GetStats();
+		m_AverageFrameMilliseconds = m_ElapsedTime * 1000.0 / m_FrameCount;
+		m_FramesPerSecond = m_FrameCount;
+		m_TicksPerSecond = m_TickCount;
+
 		PT_TRACE("{} frames, {} ticks in {:.3f} s, last frame {:.2f} ms, VSync {}", m_FrameCount, m_TickCount, m_ElapsedTime, l_Stats.CpuFrameMilliseconds, GetContext().GetRenderer().IsVSyncEnabled() ? "on" : "off");
 
 		m_ElapsedTime = 0.0;
 		m_FrameCount = 0;
 		m_TickCount = 0;
 	}
+}
+
+void SandboxLayer::OnImGuiRender()
+{
+	if (m_ShowDemo)
+	{
+		ImGui::ShowDemoWindow(&m_ShowDemo);
+	}
+
+	if (m_ShowStats)
+	{
+		DrawStatsPanel();
+	}
+}
+
+void SandboxLayer::DrawStatsPanel()
+{
+	const Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
+	const Powertrain::Window& l_Window = GetContext().GetWindow();
+	const Powertrain::RendererStats& l_Stats = l_Renderer.GetStats();
+	const std::string_view l_Adapter = l_Renderer.GetAdapterName();
+
+	ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
+	if (ImGui::Begin("Stats", &m_ShowStats, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::Text("%.*s", static_cast<int>(l_Adapter.size()), l_Adapter.data());
+		ImGui::Separator();
+
+		ImGui::Text("CPU frame  %6.2f ms  (%u FPS)", m_AverageFrameMilliseconds, m_FramesPerSecond);
+		ImGui::Text("GPU frame       -- ms  (timer arrives with M4 step 2)");
+		ImGui::Text("Fixed ticks   %u / s", m_TicksPerSecond);
+		ImGui::PlotLines("##FrameTimes", m_FrameHistory.data(), static_cast<int>(k_FrameHistoryCount), static_cast<int>(m_FrameHistoryOffset), nullptr, 0.0f, 33.3f, ImVec2(240.0f, 60.0f));
+		ImGui::Separator();
+
+		ImGui::Text("Draw calls %u   Triangles %u", l_Stats.DrawCalls, l_Stats.Triangles);
+		ImGui::Text("Frame %llu", static_cast<unsigned long long>(l_Stats.FrameIndex));
+		ImGui::Text("Window %ux%u, %s, VSync %s", l_Window.GetWidth(), l_Window.GetHeight(), l_Window.GetMode() == Powertrain::WindowMode::Windowed ? "windowed" : "borderless", l_Renderer.IsVSyncEnabled() ? "on" : "off");
+		ImGui::Separator();
+
+		ImGui::TextDisabled("F1 stats  F2 demo  V vsync  F11 fullscreen");
+	}
+	ImGui::End();
 }

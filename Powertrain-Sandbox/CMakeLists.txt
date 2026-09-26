@@ -23,8 +23,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Include" PREFIX "Include" FILES $
 # Include directory
 target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 
-# Linking executable against the engine
-target_link_libraries(${TARGET_NAME} PRIVATE Powertrain)
+# Linking executable against the engine and imgui
+target_link_libraries(${TARGET_NAME} PRIVATE Powertrain ImGui)
 
 # Making sure that sandbox only builds if the assets folder is coppied
 add_dependencies(${TARGET_NAME} CopyAssets)
