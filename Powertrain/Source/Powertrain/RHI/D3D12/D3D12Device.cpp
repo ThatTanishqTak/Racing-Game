@@ -86,7 +86,7 @@ namespace Powertrain
 
 		if (!m_Capabilities.Bindless)
 		{
-			PT_CORE_WARN("Adapter falls short of feature level 12_1, Shader Model 6.6 and Resource Binding Tier 3; the bindless renderer (M6) needs all three");
+			PT_CORE_WARN("Adapter falls short of feature level 12_1, Shader Model 6.6 and Resource Binding Tier 3; the bindless renderer needs all three and refuses to start without them");
 		}
 
 		return true;

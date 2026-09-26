@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Powertrain/Renderer/DebugDrawPass.hpp"
+#include "Powertrain/Renderer/ForwardPass.hpp"
 #include "Powertrain/Renderer/ImGuiPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
@@ -9,7 +10,9 @@
 #include "Powertrain/RHI/D3D12/D3D12DescriptorHeap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Device.hpp"
 #include "Powertrain/RHI/D3D12/D3D12GpuTimer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
+#include "Powertrain/RHI/D3D12/D3D12UploadRing.hpp"
 
 #include <array>
 #include <chrono>
@@ -37,6 +40,9 @@ namespace Powertrain
 		void WaitForNextFrame();
 		bool BeginFrame();
 		bool EndFrame();
+
+		// The scene passes, before the layers' OnRender so their debug lines land on top
+		void RenderScene();
 
 		// Draws and clears the frame's debug lines
 		void RenderDebugDraw();
@@ -78,8 +84,13 @@ namespace Powertrain
 		D3D12DescriptorHeap& GetSamplerHeap() { return m_SamplerHeap; }
 		D3D12DeferredReleaseQueue& GetDeferredReleaseQueue() { return m_DeferredRelease; }
 		D3D12GpuTimer& GetGpuTimer() { return m_GpuTimer; }
+		D3D12UploadRing& GetUploadRing() { return m_UploadRing; }
+		D3D12PipelineCache& GetPipelineCache() { return m_PipelineCache; }
 		uint32_t GetFrameIndex() const { return m_FrameIndex; }
 		const EnvironmentSettings& GetEnvironment() const { return m_Environment; }
+
+		// Root CBV address of this frame's FrameConstants in the upload ring; zero outside a frame
+		D3D12_GPU_VIRTUAL_ADDRESS GetFrameConstantsAddress() const { return m_FrameConstantsAddress; }
 
 	private:
 		bool ApplyPendingResize();
@@ -96,6 +107,9 @@ namespace Powertrain
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
 		D3D12GpuTimer m_GpuTimer;
+		D3D12UploadRing m_UploadRing;
+		D3D12PipelineCache m_PipelineCache;
+		ForwardPass m_ForwardPass;
 		DebugDrawPass m_DebugDrawPass;
 		ImGuiPass m_ImGuiPass;
 
@@ -105,6 +119,7 @@ namespace Powertrain
 		EnvironmentSettings m_Environment;
 		Matrix4 m_ViewProjection;
 		Color m_ClearColor;
+		D3D12_GPU_VIRTUAL_ADDRESS m_FrameConstantsAddress = 0;
 
 		std::array<uint64_t, D3D12::k_FramesInFlight> m_FrameFenceValues = {};
 		uint32_t m_FrameIndex = 0;

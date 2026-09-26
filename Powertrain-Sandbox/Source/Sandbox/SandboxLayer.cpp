@@ -164,33 +164,31 @@ void SandboxLayer::OnRender()
 
 void SandboxLayer::BuildScene()
 {
-	using namespace Powertrain;
-
 	// A car-sized box spinning on the spot
 	m_Car = m_Scene->CreateEntity("Car");
-	m_Scene->GetRegistry().Get<TransformComponent>(m_Car).Teleport({ 0.0f, 0.7f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(m_Car, DebugShapeComponent::Kind::Box, Vector3{ 1.0f, 0.7f, 2.2f }, 0.0f, Color{ 1.0f, 0.8f, 0.2f, 1.0f });
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(m_Car).Teleport({ 0.0f, 0.7f, 0.0f });
+	m_Scene->GetRegistry().Add<DebugShapeComponent>(m_Car, DebugShapeComponent::Kind::Box, Powertrain::Vector3{ 1.0f, 0.7f, 2.2f }, 0.0f, Powertrain::Color{ 1.0f, 0.8f, 0.2f, 1.0f });
 	m_Scene->GetRegistry().Add<MotionComponent>(m_Car, 0.8f);
 
 	// A roof light that bobs in the car's frame, so it orbits with the spin and rises and falls on its own
-	const Entity l_RoofLight = m_Scene->CreateEntity("RoofLight");
+	const Powertrain::Entity l_RoofLight = m_Scene->CreateEntity("RoofLight");
 	m_Scene->SetParent(l_RoofLight, m_Car);
-	m_Scene->GetRegistry().Get<TransformComponent>(l_RoofLight).Teleport({ 0.0f, 1.0f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_RoofLight, DebugShapeComponent::Kind::Sphere, Vector3::Zero(), 0.25f, Color{ 1.0f, 0.3f, 0.3f, 1.0f });
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_RoofLight).Teleport({ 0.0f, 1.0f, 0.0f });
+	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_RoofLight, DebugShapeComponent::Kind::Sphere, Powertrain::Vector3::Zero(), 0.25f, Powertrain::Color{ 1.0f, 0.3f, 0.3f, 1.0f });
 	m_Scene->GetRegistry().Add<MotionComponent>(l_RoofLight, 0.0f, 1.0f, 0.15f, 1.0f);
 
 	// A thin antenna at the rear corner spinning fast about its own axis, composed with the car's spin
-	const Entity l_Antenna = m_Scene->CreateEntity("Antenna");
+	const Powertrain::Entity l_Antenna = m_Scene->CreateEntity("Antenna");
 	m_Scene->SetParent(l_Antenna, m_Car);
-	m_Scene->GetRegistry().Get<TransformComponent>(l_Antenna).Teleport({ 0.6f, 1.1f, -1.8f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Antenna, DebugShapeComponent::Kind::Box, Vector3{ 0.05f, 0.4f, 0.2f }, 0.0f, Color{ 0.4f, 1.0f, 0.4f, 1.0f });
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Antenna).Teleport({ 0.6f, 1.1f, -1.8f });
+	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Antenna, DebugShapeComponent::Kind::Box, Powertrain::Vector3{ 0.05f, 0.4f, 0.2f }, 0.0f, Powertrain::Color{ 0.4f, 1.0f, 0.4f, 1.0f });
 	m_Scene->GetRegistry().Add<MotionComponent>(l_Antenna, 4.0f);
 
 	// A free-standing sphere bobbing slowly beside the car
-	const Entity l_Sphere = m_Scene->CreateEntity("Sphere");
-	m_Scene->GetRegistry().Get<TransformComponent>(l_Sphere).Teleport({ 5.0f, 1.0f, 0.0f });
-	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Sphere, DebugShapeComponent::Kind::Sphere, Vector3::Zero(), 1.0f, Color{ 0.3f, 0.9f, 1.0f, 0.8f });
-	m_Scene->GetRegistry().Add<MotionComponent>(l_Sphere, 0.0f, 1.0f, 0.5f, 0.5f, Math::k_HalfPi);
+	const Powertrain::Entity l_Sphere = m_Scene->CreateEntity("Sphere");
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(l_Sphere).Teleport({ 5.0f, 1.0f, 0.0f });
+	m_Scene->GetRegistry().Add<DebugShapeComponent>(l_Sphere, DebugShapeComponent::Kind::Sphere, Powertrain::Vector3::Zero(), 1.0f, Powertrain::Color{ 0.3f, 0.9f, 1.0f, 0.8f });
+	m_Scene->GetRegistry().Add<MotionComponent>(l_Sphere, 0.0f, 1.0f, 0.5f, 0.5f, Powertrain::Math::k_HalfPi);
 
 	PT_INFO("Sandbox scene built with {} entities", m_Scene->GetRegistry().GetAliveCount());
 }

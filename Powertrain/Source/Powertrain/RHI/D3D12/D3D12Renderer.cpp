@@ -1,7 +1,9 @@
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
 
 #include "Powertrain/Core/CoreLog.hpp"
+#include "Powertrain/Platform/Windows/Win32.hpp"
 #include "Powertrain/Platform/Windows/WindowsWindow.hpp"
+#include "Powertrain/Renderer/ShaderInterop.hpp"
 
 namespace Powertrain
 {
@@ -14,8 +16,12 @@ namespace Powertrain
 		constexpr uint32_t k_TransientResourceCountPerFrame = 8192;
 		constexpr uint32_t k_SamplerCount = 2048;
 
-		// GPU timer slots; 0 is the frame, the M6 passes take 2 onward
+		// Constants and per-draw data for one frame; asset uploads go through the copy queue instead
+		constexpr uint64_t k_UploadRingBytesPerFrame = 32ull * 1024 * 1024;
+
+		// GPU timer slots; 0 is the frame, 1 the debug lines, the scene passes take 2 onward
 		constexpr uint32_t k_DebugDrawTimer = 1;
+		constexpr uint32_t k_ForwardTimer = 2;
 
 		D3D12_RESOURCE_BARRIER MakeTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 		{
@@ -79,7 +85,29 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_Device.GetCapabilities().Bindless)
+		{
+			PT_CORE_ERROR("Adapter lacks feature level 12_1, Shader Model 6.6 or Resource Binding Tier 3; the bindless renderer cannot start");
+
+			return false;
+		}
+
+		if (!m_UploadRing.Initialize(m_Device, k_UploadRingBytesPerFrame, "Upload Ring"))
+		{
+			return false;
+		}
+
+		if (!m_PipelineCache.Initialize(m_Device, Win32::GetExecutableDirectory() / "Shaders"))
+		{
+			return false;
+		}
+
 		// Passes in frame order
+		if (!m_ForwardPass.Initialize(*this))
+		{
+			return false;
+		}
+
 		if (!m_DebugDrawPass.Initialize(*this))
 		{
 			return false;
@@ -91,6 +119,7 @@ namespace Powertrain
 		}
 
 		m_ViewProjection = Matrix4();
+		m_FrameConstantsAddress = 0;
 
 		m_FrameFenceValues.fill(0);
 		m_FrameIndex = 0;
@@ -132,6 +161,9 @@ namespace Powertrain
 		// Reverse creation order
 		m_ImGuiPass.Shutdown();
 		m_DebugDrawPass.Shutdown();
+		m_ForwardPass.Shutdown();
+		m_PipelineCache.Shutdown();
+		m_UploadRing.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
 		m_ResourceHeap.Shutdown();
@@ -188,6 +220,7 @@ namespace Powertrain
 
 		m_ResourceHeap.BeginFrame(m_FrameIndex);
 		m_SamplerHeap.BeginFrame(m_FrameIndex);
+		m_UploadRing.BeginFrame(m_FrameIndex);
 
 		if (!m_CommandList.Reset(m_FrameIndex))
 		{
@@ -220,6 +253,13 @@ namespace Powertrain
 
 		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
 		l_List->RSSetScissorRects(1, &l_Scissor);
+
+		// Frame constants go into the ring once; every pass binds the same address at root parameter 1
+		ShaderInterop::FrameConstants l_FrameConstants = {};
+		l_FrameConstants.ViewProjection = m_ViewProjection;
+		l_FrameConstants.ViewportSize = { l_Viewport.Width, l_Viewport.Height, 1.0f / l_Viewport.Width, 1.0f / l_Viewport.Height };
+		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
+		m_FrameConstantsAddress = m_UploadRing.Upload(l_FrameConstants).Gpu;
 
 		m_FrameDrawCalls = 0;
 		m_FrameTriangles = 0;
@@ -264,6 +304,7 @@ namespace Powertrain
 		}
 
 		m_FrameIndex = (m_FrameIndex + 1) % D3D12::k_FramesInFlight;
+		m_FrameConstantsAddress = 0;
 
 		const std::chrono::steady_clock::time_point l_Now = std::chrono::steady_clock::now();
 		m_Stats.CpuFrameMilliseconds = std::chrono::duration<double, std::milli>(l_Now - m_LastFrameEnd).count();
@@ -274,6 +315,25 @@ namespace Powertrain
 		++m_Stats.FrameIndex;
 
 		return true;
+	}
+
+	void D3D12Renderer::RenderScene()
+	{
+		PT_CORE_ASSERT(m_InFrame, "RenderScene called outside BeginFrame and EndFrame");
+
+		if (!m_InFrame)
+		{
+			return;
+		}
+
+		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
+		m_GpuTimer.Begin(l_List, k_ForwardTimer);
+		m_ForwardPass.Render(l_List, m_FrameConstantsAddress);
+		m_GpuTimer.End(l_List, k_ForwardTimer);
+
+		m_FrameDrawCalls += m_ForwardPass.GetDrawCallCount();
+		m_FrameTriangles += m_ForwardPass.GetTriangleCount();
 	}
 
 	void D3D12Renderer::RenderDebugDraw()

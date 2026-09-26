@@ -1,16 +1,12 @@
 #include "Powertrain/Renderer/DebugDrawPass.hpp"
 
 #include "Powertrain/Core/CoreLog.hpp"
-#include "Powertrain/Platform/Windows/Win32.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <filesystem>
 #include <format>
-#include <fstream>
-#include <iterator>
 #include <numbers>
 
 namespace Powertrain
@@ -23,21 +19,6 @@ namespace Powertrain
 
 		// Matrix4 is uploaded raw as 16 root constants
 		static_assert(sizeof(Matrix4) == 16 * sizeof(float), "Matrix4 must be 16 floats");
-
-		bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& bytes)
-		{
-			std::ifstream l_File(path, std::ios::binary);
-			if (!l_File)
-			{
-				PT_CORE_ERROR("Cannot open '{}'", path.string());
-
-				return false;
-			}
-
-			bytes.assign(std::istreambuf_iterator<char>(l_File), std::istreambuf_iterator<char>());
-
-			return !bytes.empty();
-		}
 
 		// RGBA8 with R in the low byte; DebugLine.hlsl unpacks in the same order
 		uint32_t PackColor(const Color& color)
@@ -60,18 +41,15 @@ namespace Powertrain
 	{
 		ID3D12Device* l_Device = renderer.GetDevice().GetHandle();
 
-		const std::filesystem::path l_ShaderDirectory = Win32::GetExecutableDirectory() / "Shaders";
-
-		std::vector<uint8_t> l_VertexShader;
-		std::vector<uint8_t> l_PixelShader;
-		if (!ReadBinaryFile(l_ShaderDirectory / "DebugLine.VSMain.cso", l_VertexShader) || !ReadBinaryFile(l_ShaderDirectory / "DebugLine.PSMain.cso", l_PixelShader))
+		// The cache reads and keeps the bytecode; the pass builds its own pipeline until it joins the global root signature at M6 step 5
+		const std::vector<uint8_t>* l_VertexShader = renderer.GetPipelineCache().GetShader("DebugLine.VSMain");
+		const std::vector<uint8_t>* l_PixelShader = renderer.GetPipelineCache().GetShader("DebugLine.PSMain");
+		if (l_VertexShader == nullptr || l_PixelShader == nullptr)
 		{
-			PT_CORE_ERROR("Debug line shaders missing; the PowertrainShaders target writes them to '{}'", l_ShaderDirectory.string());
-
 			return false;
 		}
 
-		if (!CreateRootSignature(l_Device) || !CreatePipelineState(l_Device, l_VertexShader, l_PixelShader) || !CreateVertexBuffers(l_Device))
+		if (!CreateRootSignature(l_Device) || !CreatePipelineState(l_Device, *l_VertexShader, *l_PixelShader) || !CreateVertexBuffers(l_Device))
 		{
 			Shutdown();
 

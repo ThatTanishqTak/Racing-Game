@@ -139,6 +139,9 @@ namespace Powertrain
 			bool l_Rendered = m_Renderer->BeginFrame();
 			if (l_Rendered)
 			{
+				// The scene goes down first, so the layers' debug lines and the UI land on top of it
+				m_Renderer->RenderScene();
+
 				for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
 				{
 					l_Layer->OnRender();
