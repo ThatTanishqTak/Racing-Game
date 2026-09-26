@@ -12,8 +12,7 @@ namespace Powertrain
 {
 	namespace
 	{
-		// Heap sizes. The resource heap is 65,536 slots total: persistent plus two frames of transients.
-		constexpr uint32_t k_RtvCount = 64;
+		constexpr uint32_t k_RtvCount = 128;
 		constexpr uint32_t k_DsvCount = 16;
 		constexpr uint32_t k_PersistentResourceCount = 49152;
 		constexpr uint32_t k_TransientResourceCountPerFrame = 8192;
@@ -26,14 +25,14 @@ namespace Powertrain
 		constexpr uint32_t k_DebugDrawTimer = 1;
 		constexpr uint32_t k_ForwardTimer = 2;
 		constexpr uint32_t k_ShadowTimer = 3;
+		constexpr uint32_t k_SkyTimer = 4;
+		constexpr uint32_t k_EnvironmentTimer = 5;
+		constexpr uint32_t k_PostTimer = 6;
 
 		// Receiver-side shadow bias: how many texels to push along the normal, the constant depth bias in cascade depth units, and the fade over the last stretch of the far cascade
 		constexpr float k_ShadowNormalOffsetTexels = 1.5f;
 		constexpr float k_ShadowDepthBias = 0.0002f;
 		constexpr float k_ShadowFadeLength = 50.0f;
-
-		// Flat ambient as a fraction of the sun's brightest channel, tinted by the sky, until IBL replaces it at step 4
-		constexpr float k_AmbientFraction = 0.12f;
 
 		D3D12_RESOURCE_BARRIER MakeTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 		{
@@ -104,12 +103,22 @@ namespace Powertrain
 			return false;
 		}
 
-		if (!m_DepthBuffer.Initialize(m_Device, m_DsvHeap, m_SwapChain.GetWidth(), m_SwapChain.GetHeight()))
+		if (!m_SceneTarget.Initialize(m_Device, m_RtvHeap, m_ResourceHeap, m_SwapChain.GetWidth(), m_SwapChain.GetHeight(), m_ClearColor))
+		{
+			return false;
+		}
+
+		if (!m_DepthBuffer.Initialize(m_Device, m_DsvHeap, m_SwapChain.GetWidth(), m_SwapChain.GetHeight(), m_SceneTarget.GetSampleCount()))
 		{
 			return false;
 		}
 
 		if (!m_ShadowMap.Initialize(m_Device, m_DsvHeap, m_ResourceHeap))
+		{
+			return false;
+		}
+
+		if (!m_EnvironmentMaps.Initialize(m_Device, m_RtvHeap, m_ResourceHeap))
 		{
 			return false;
 		}
@@ -150,6 +159,11 @@ namespace Powertrain
 		}
 
 		// Passes in frame order
+		if (!m_EnvironmentPass.Initialize(*this))
+		{
+			return false;
+		}
+
 		if (!m_ShadowPass.Initialize(*this))
 		{
 			return false;
@@ -160,7 +174,17 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_SkyPass.Initialize(*this))
+		{
+			return false;
+		}
+
 		if (!m_DebugDrawPass.Initialize(*this))
+		{
+			return false;
+		}
+
+		if (!m_PostPass.Initialize(*this))
 		{
 			return false;
 		}
@@ -178,9 +202,12 @@ namespace Powertrain
 		m_FrameDrawCalls = 0;
 		m_FrameTriangles = 0;
 		m_Stats = RendererStats();
+		m_Stats.SampleCount = m_SceneTarget.GetSampleCount();
 		m_LastFrameEnd = std::chrono::steady_clock::now();
 		m_ResizePending = false;
+		m_TargetsDirty = false;
 		m_InFrame = false;
+		m_SceneResolved = false;
 		m_FrameSlotAcquired = false;
 		m_DeviceLost = false;
 		m_Initialized = true;
@@ -212,9 +239,12 @@ namespace Powertrain
 
 		// Reverse creation order
 		m_ImGuiPass.Shutdown();
+		m_PostPass.Shutdown();
 		m_DebugDrawPass.Shutdown();
+		m_SkyPass.Shutdown();
 		m_ForwardPass.Shutdown();
 		m_ShadowPass.Shutdown();
+		m_EnvironmentPass.Shutdown();
 		m_SceneRenderer.Shutdown();
 		DestroySamplers();
 		m_Materials.Shutdown();
@@ -222,8 +252,10 @@ namespace Powertrain
 		m_Meshes.Shutdown();
 		m_PipelineCache.Shutdown();
 		m_UploadRing.Shutdown();
+		m_EnvironmentMaps.Shutdown();
 		m_ShadowMap.Shutdown();
 		m_DepthBuffer.Shutdown();
+		m_SceneTarget.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
 		m_ResourceHeap.Shutdown();
@@ -264,7 +296,7 @@ namespace Powertrain
 			return false;
 		}
 
-		if (m_ResizePending && !ApplyPendingResize())
+		if ((m_ResizePending || m_TargetsDirty) && !ApplyPendingResize())
 		{
 			m_DeviceLost = true;
 
@@ -302,16 +334,15 @@ namespace Powertrain
 		const D3D12_RESOURCE_BARRIER l_ToRenderTarget = MakeTransition(m_SwapChain.GetCurrentBuffer(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		l_List->ResourceBarrier(1, &l_ToRenderTarget);
 
-		// Colour and depth stay bound through the scene and the debug lines; EndImGuiFrame drops the depth for the UI
+		// The scene colour and depth stay bound through the scene passes and the debug lines; the post pass then takes over the swap chain
 		BindSceneTargets(l_List);
-
-		const float l_Clear[4] = { m_ClearColor.R, m_ClearColor.G, m_ClearColor.B, m_ClearColor.A };
-		l_List->ClearRenderTargetView(m_SwapChain.GetCurrentRtv(), l_Clear, 0, nullptr);
+		m_SceneTarget.Clear(l_List);
 		m_DepthBuffer.Clear(l_List);
 
 		m_FrameDrawCalls = 0;
 		m_FrameTriangles = 0;
 		m_InFrame = true;
+		m_SceneResolved = false;
 
 		return true;
 	}
@@ -327,6 +358,8 @@ namespace Powertrain
 		}
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
+		ResolveScene(l_List);
 
 		const D3D12_RESOURCE_BARRIER l_ToPresent = MakeTransition(m_SwapChain.GetCurrentBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		l_List->ResourceBarrier(1, &l_ToPresent);
@@ -357,6 +390,12 @@ namespace Powertrain
 		const std::chrono::steady_clock::time_point l_Now = std::chrono::steady_clock::now();
 		m_Stats.CpuFrameMilliseconds = std::chrono::duration<double, std::milli>(l_Now - m_LastFrameEnd).count();
 		m_Stats.GpuFrameMilliseconds = m_GpuTimer.GetMilliseconds(D3D12GpuTimer::k_FrameTimer);
+		m_Stats.GpuEnvironmentMilliseconds = m_GpuTimer.GetMilliseconds(k_EnvironmentTimer);
+		m_Stats.GpuShadowMilliseconds = m_GpuTimer.GetMilliseconds(k_ShadowTimer);
+		m_Stats.GpuForwardMilliseconds = m_GpuTimer.GetMilliseconds(k_ForwardTimer);
+		m_Stats.GpuSkyMilliseconds = m_GpuTimer.GetMilliseconds(k_SkyTimer);
+		m_Stats.GpuDebugDrawMilliseconds = m_GpuTimer.GetMilliseconds(k_DebugDrawTimer);
+		m_Stats.GpuPostMilliseconds = m_GpuTimer.GetMilliseconds(k_PostTimer);
 		m_Stats.DrawCalls = m_FrameDrawCalls;
 		m_Stats.Triangles = m_FrameTriangles;
 		m_LastFrameEnd = l_Now;
@@ -405,8 +444,6 @@ namespace Powertrain
 
 		// Frame constants go into the ring once; every pass binds the same address at root parameter 1
 		const SunLight& l_Sun = m_SceneRenderer.GetSun();
-		const float l_SunPeak = std::max(l_Sun.Radiance.X, std::max(l_Sun.Radiance.Y, l_Sun.Radiance.Z));
-		const float l_Ambient = k_AmbientFraction * l_SunPeak;
 		const float l_Width = static_cast<float>(m_SwapChain.GetWidth());
 		const float l_Height = static_cast<float>(m_SwapChain.GetHeight());
 
@@ -414,14 +451,19 @@ namespace Powertrain
 		l_FrameConstants.View = m_CameraView.View;
 		l_FrameConstants.Projection = m_CameraView.Projection;
 		l_FrameConstants.ViewProjection = m_CameraView.ViewProjection;
+		l_FrameConstants.InverseViewProjection = m_CameraView.InverseViewProjection;
 		l_FrameConstants.CameraPosition = { m_CameraView.Position.X, m_CameraView.Position.Y, m_CameraView.Position.Z, m_CameraView.NearPlane };
 		l_FrameConstants.SunDirection = { l_Sun.TowardsSun.X, l_Sun.TowardsSun.Y, l_Sun.TowardsSun.Z, 0.0f };
 		l_FrameConstants.SunColor = { l_Sun.Radiance.X, l_Sun.Radiance.Y, l_Sun.Radiance.Z, l_Sun.FromScene ? 1.0f : 0.0f };
-		l_FrameConstants.AmbientColor = { m_Environment.SkyTint.R * l_Ambient, m_Environment.SkyTint.G * l_Ambient, m_Environment.SkyTint.B * l_Ambient, m_Environment.Exposure };
+		l_FrameConstants.SkyTint = { m_Environment.SkyTint.R, m_Environment.SkyTint.G, m_Environment.SkyTint.B, m_Environment.Exposure };
 		l_FrameConstants.ViewportSize = { l_Width, l_Height, 1.0f / l_Width, 1.0f / l_Height };
 		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
 		l_FrameConstants.FrameInfo.Y = m_SceneRenderer.GetInstanceBufferIndex();
 		l_FrameConstants.FrameInfo.Z = l_MaterialTableIndex;
+		l_FrameConstants.EnvironmentInfo.X = m_EnvironmentMaps.GetIrradianceIndex();
+		l_FrameConstants.EnvironmentInfo.Y = m_EnvironmentMaps.GetSpecularIndex();
+		l_FrameConstants.EnvironmentInfo.Z = m_EnvironmentMaps.GetBrdfIndex();
+		l_FrameConstants.EnvironmentInfo.W = D3D12EnvironmentMaps::k_SpecularMipCount;
 
 		// Shadow constants: cascade matrices, where each ends, how big its texels are, and the receiver bias
 		const std::span<const ShadowCascade> l_Cascades = m_SceneRenderer.GetShadowCascades();
@@ -449,7 +491,17 @@ namespace Powertrain
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
-		// Shadows first, into their own depth slices; then the swap chain targets come back for the forward pass
+		// The sky is baked into the environment maps only when the sun or the tint moved; the forward pass reads them later in this list
+		if (m_EnvironmentPass.NeedsBake(l_Sun, m_Environment.SkyTint))
+		{
+			m_GpuTimer.Begin(l_List, k_EnvironmentTimer);
+			m_EnvironmentPass.Render(l_List, m_EnvironmentMaps, m_UploadRing, m_FrameConstantsAddress, l_Sun, m_Environment.SkyTint);
+			m_GpuTimer.End(l_List, k_EnvironmentTimer);
+
+			m_FrameDrawCalls += m_EnvironmentPass.GetDrawCallCount();
+		}
+
+		// Shadows next, into their own depth slices; then the scene targets come back for the forward pass and the sky
 		m_GpuTimer.Begin(l_List, k_ShadowTimer);
 		m_ShadowPass.Render(l_List, m_ShadowMap, m_UploadRing, m_FrameConstantsAddress, l_ShadowCascades);
 		m_GpuTimer.End(l_List, k_ShadowTimer);
@@ -460,9 +512,14 @@ namespace Powertrain
 		m_ForwardPass.Render(l_List, m_FrameConstantsAddress, l_Batches);
 		m_GpuTimer.End(l_List, k_ForwardTimer);
 
-		m_FrameDrawCalls += m_ShadowPass.GetDrawCallCount() + m_ForwardPass.GetDrawCallCount();
+		m_GpuTimer.Begin(l_List, k_SkyTimer);
+		m_SkyPass.Render(l_List, m_FrameConstantsAddress);
+		m_GpuTimer.End(l_List, k_SkyTimer);
+
+		m_FrameDrawCalls += m_ShadowPass.GetDrawCallCount() + m_ForwardPass.GetDrawCallCount() + m_SkyPass.GetDrawCallCount();
 		m_FrameTriangles += m_ShadowPass.GetTriangleCount() + m_ForwardPass.GetTriangleCount();
 		m_Stats.ShadowDrawCalls = m_ShadowPass.GetDrawCallCount();
+		m_Stats.EnvironmentBakes = m_EnvironmentPass.GetBakeCount();
 		m_Stats.Instances = m_SceneRenderer.GetVisibleInstanceCount();
 		m_Stats.CulledInstances = m_SceneRenderer.GetCulledInstanceCount();
 		m_Stats.Meshes = m_Meshes.GetAliveCount();
@@ -483,7 +540,7 @@ namespace Powertrain
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
 		m_GpuTimer.Begin(l_List, k_DebugDrawTimer);
-		m_DebugDrawPass.Render(l_List, m_FrameIndex, m_CameraView.ViewProjection);
+		m_DebugDrawPass.Render(l_List, m_FrameConstantsAddress);
 		m_GpuTimer.End(l_List, k_DebugDrawTimer);
 
 		m_FrameDrawCalls += m_DebugDrawPass.GetDrawCallCount();
@@ -510,8 +567,12 @@ namespace Powertrain
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
 
-		// The ImGui pipeline has no depth format, so the depth view comes off before its draws
+		// The scene lands on the swap chain first, so the UI draws over the tonemapped image
+		ResolveScene(l_List);
+
+		// The ImGui pipeline has no depth format, so only the swap chain view is bound for its draws
 		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
+		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, nullptr);
 		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, nullptr);
 
 		m_ImGuiPass.EndFrame(l_List);
@@ -538,7 +599,11 @@ namespace Powertrain
 
 	bool D3D12Renderer::ApplyPendingResize()
 	{
+		// A clear colour change alone recreates the scene target at the current size, because its optimized clear value is baked in
+		const uint32_t l_Width = m_ResizePending ? m_PendingWidth : m_SwapChain.GetWidth();
+		const uint32_t l_Height = m_ResizePending ? m_PendingHeight : m_SwapChain.GetHeight();
 		m_ResizePending = false;
+		m_TargetsDirty = false;
 
 		// Nothing may still reference the old buffers: finish every frame, then drop what the release queue holds
 		m_DirectQueue.Flush();
@@ -547,7 +612,15 @@ namespace Powertrain
 		m_Textures.ReleaseCompleted(m_DirectQueue.GetCompletedValue());
 		m_FrameFenceValues.fill(0);
 
-		return m_SwapChain.Resize(m_PendingWidth, m_PendingHeight) && m_DepthBuffer.Resize(m_PendingWidth, m_PendingHeight);
+		return m_SwapChain.Resize(l_Width, l_Height) && m_SceneTarget.Resize(l_Width, l_Height, m_ClearColor) && m_DepthBuffer.Resize(l_Width, l_Height);
+	}
+
+	void D3D12Renderer::SetClearColor(const Color& color)
+	{
+		m_ClearColor = color;
+
+		// The scene target carries the colour as its optimized clear value, so it is rebuilt at the next BeginFrame
+		m_TargetsDirty = true;
 	}
 
 	void D3D12Renderer::SetVSync(bool enabled)
@@ -637,8 +710,8 @@ namespace Powertrain
 
 	void D3D12Renderer::BindSceneTargets(ID3D12GraphicsCommandList* commandList)
 	{
-		// Colour and depth stay bound through the scene and the debug lines; EndImGuiFrame drops the depth for the UI
-		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
+		// The multisampled scene colour and depth stay bound through the scene passes and the debug lines; the post pass moves to the swap chain
+		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SceneTarget.GetRtv();
 		const D3D12_CPU_DESCRIPTOR_HANDLE l_Dsv = m_DepthBuffer.GetDsv();
 		commandList->OMSetRenderTargets(1, &l_Rtv, FALSE, &l_Dsv);
 
@@ -651,6 +724,22 @@ namespace Powertrain
 
 		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
 		commandList->RSSetScissorRects(1, &l_Scissor);
+	}
+
+	void D3D12Renderer::ResolveScene(ID3D12GraphicsCommandList* commandList)
+	{
+		if (m_SceneResolved)
+		{
+			return;
+		}
+
+		// Resolve and tonemap once per frame, from whichever of EndImGuiFrame and EndFrame comes first
+		m_GpuTimer.Begin(commandList, k_PostTimer);
+		m_PostPass.Render(commandList, m_SceneTarget, m_UploadRing, m_SwapChain.GetCurrentRtv(), m_Environment.Exposure);
+		m_GpuTimer.End(commandList, k_PostTimer);
+
+		m_FrameDrawCalls += m_PostPass.GetDrawCallCount();
+		m_SceneResolved = true;
 	}
 
 	bool D3D12Renderer::CreateSamplers()

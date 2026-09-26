@@ -1,18 +1,15 @@
-// Debug lines
+// Debug lines on the global root signature: the vertices sit in the upload ring behind a transient descriptor
+
+#include "ShaderInterop.hlsli"
+
+ConstantBuffer<DrawConstants> Draw : register(b0);
+ConstantBuffer<FrameConstants> Frame : register(b1);
 
 struct LineVertex
 {
     float3 Position;
     uint Color; // RGBA8, R in the low byte, linear
 };
-
-// Matches Matrix4: row-major with row vectors, so points transform as v * M
-cbuffer FrameConstants : register(b0)
-{
-    row_major float4x4 ViewProjection;
-};
-
-StructuredBuffer<LineVertex> Vertices : register(t0);
 
 struct VertexOutput
 {
@@ -27,10 +24,11 @@ float4 UnpackColor(uint packed)
 
 VertexOutput VSMain(uint vertexId : SV_VertexID)
 {
-    const LineVertex l_Vertex = Vertices[vertexId];
+    StructuredBuffer<LineVertex> l_Vertices = ResourceDescriptorHeap[Draw.VertexBufferIndex];
+    const LineVertex l_Vertex = l_Vertices[vertexId];
 
     VertexOutput l_Output;
-    l_Output.Position = mul(float4(l_Vertex.Position, 1.0), ViewProjection);
+    l_Output.Position = mul(float4(l_Vertex.Position, 1.0), Frame.ViewProjection);
     l_Output.Color = UnpackColor(l_Vertex.Color);
 
     return l_Output;

@@ -3,7 +3,6 @@
 ConstantBuffer<DrawConstants> Draw : register(b0);
 ConstantBuffer<FrameConstants> Frame : register(b1);
 
-static const float k_Pi = 3.14159265;
 static const float k_MinRoughness = 0.04;
 
 struct VertexOutput
@@ -56,12 +55,6 @@ float VisibilitySmithGGX(float nDotV, float nDotL, float alpha)
 float3 FresnelSchlick(float vDotH, float3 f0)
 {
     return f0 + (1.0 - f0) * pow(1.0 - vDotH, 5.0);
-}
-
-// ACES fit by Narkowicz; lives here until the post pass at step 5 takes over
-float3 TonemapAces(float3 color)
-{
-    return saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
 }
 
 float SampleSunShadow(float3 worldPosition, float3 normal, float nDotL)
@@ -163,12 +156,25 @@ float4 PSMain(VertexOutput input) : SV_Target
 
     float3 l_Color = (l_Diffuse + l_Specular) * Frame.SunColor.rgb * (l_NDotL * l_Shadow);
 
-    // Flat ambient until the sky and IBL arrive at step 4; metals take it through F0 so they do not go black in shadow
-    l_Color += Frame.AmbientColor.rgb * (l_BaseColor.rgb * (1.0 - l_Metallic) + l_F0 * l_Metallic);
+    // Image-based lighting from the baked sky: the irradiance cube for the diffuse, the prefiltered cube and the split-sum table for the specular
+    SamplerState l_ClampSampler = SamplerDescriptorHeap[k_SamplerLinearClamp];
+    TextureCube l_Irradiance = ResourceDescriptorHeap[Frame.EnvironmentInfo.x];
+    TextureCube l_PrefilteredSky = ResourceDescriptorHeap[Frame.EnvironmentInfo.y];
+    Texture2D l_BrdfTable = ResourceDescriptorHeap[Frame.EnvironmentInfo.z];
+
+    const float3 l_Reflected = reflect(-l_View, l_Normal);
+    const float l_SpecularLod = l_Roughness * (float) (Frame.EnvironmentInfo.w - 1);
+    const float3 l_Prefiltered = l_PrefilteredSky.SampleLevel(l_ClampSampler, l_Reflected, l_SpecularLod).rgb;
+    const float2 l_Brdf = l_BrdfTable.SampleLevel(l_ClampSampler, float2(l_NDotV, l_Roughness), 0.0).rg;
+    const float3 l_AmbientSpecular = l_Prefiltered * (l_F0 * l_Brdf.x + l_Brdf.y);
+
+    // Roughness-aware Fresnel, so rough dielectrics do not pick up a rim of reflection at grazing angles
+    const float3 l_AmbientFresnel = l_F0 + (max(1.0 - l_Roughness, l_F0) - l_F0) * pow(1.0 - l_NDotV, 5.0);
+    const float3 l_AmbientDiffuse = l_Irradiance.SampleLevel(l_ClampSampler, l_Normal, 0.0).rgb * l_BaseColor.rgb * (1.0 - l_Metallic) * (1.0 - l_AmbientFresnel);
+
+    l_Color += l_AmbientDiffuse + l_AmbientSpecular;
     l_Color += l_Emissive;
 
-    // Exposure then tonemap; the sRGB render target encodes on write
-    l_Color = TonemapAces(l_Color * Frame.AmbientColor.w);
-
+    // Linear HDR out; exposure and the tonemap run in the post pass after the resolve
     return float4(l_Color, l_BaseColor.a);
 }

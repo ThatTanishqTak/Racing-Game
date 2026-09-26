@@ -80,6 +80,7 @@ namespace Powertrain
 		Matrix4 View;
 		Matrix4 Projection;
 		Matrix4 ViewProjection;
+		Matrix4 InverseViewProjection;
 		Vector3 Position;
 		float NearPlane = 0.1f;
 		float VerticalFov = Math::ToRadians(60.0f);

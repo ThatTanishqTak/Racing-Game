@@ -1,13 +1,18 @@
 #include "Powertrain/Renderer/DebugDrawPass.hpp"
 
 #include "Powertrain/Core/CoreLog.hpp"
+#include "Powertrain/Renderer/ShaderInterop.hpp"
+#include "Powertrain/RHI/D3D12/D3D12DepthBuffer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12SceneTarget.hpp"
+#include "Powertrain/RHI/D3D12/D3D12UploadRing.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <format>
 #include <numbers>
+
 
 namespace Powertrain
 {
@@ -16,9 +21,6 @@ namespace Powertrain
 		constexpr uint32_t k_SphereSegments = 32;
 		constexpr float k_ArrowHeadFraction = 0.2f;
 		constexpr float k_Epsilon = Math::k_Epsilon;
-
-		// Matrix4 is uploaded raw as 16 root constants
-		static_assert(sizeof(Matrix4) == 16 * sizeof(float), "Matrix4 must be 16 floats");
 
 		// RGBA8 with R in the low byte; DebugLine.hlsl unpacks in the same order
 		uint32_t PackColor(const Color& color)
@@ -39,17 +41,27 @@ namespace Powertrain
 
 	bool DebugDrawPass::Initialize(D3D12Renderer& renderer)
 	{
-		ID3D12Device* l_Device = renderer.GetDevice().GetHandle();
+		m_Renderer = &renderer;
 
-		// The cache reads and keeps the bytecode; the pass builds its own pipeline until it joins the global root signature at M6 step 5
-		const std::vector<uint8_t>* l_VertexShader = renderer.GetPipelineCache().GetShader("DebugLine.VSMain");
-		const std::vector<uint8_t>* l_PixelShader = renderer.GetPipelineCache().GetShader("DebugLine.PSMain");
-		if (l_VertexShader == nullptr || l_PixelShader == nullptr)
-		{
-			return false;
-		}
+		D3D12PipelineCache& l_Cache = renderer.GetPipelineCache();
+		m_RootSignature = l_Cache.GetRootSignature();
 
-		if (!CreateRootSignature(l_Device) || !CreatePipelineState(l_Device, *l_VertexShader, *l_PixelShader) || !CreateVertexBuffers(l_Device))
+		// Lines into the multisampled scene target: straight alpha blend, no culling, depth-tested against the scene without writing
+		GraphicsPipelineDescription l_Description;
+		l_Description.VertexShader = "DebugLine.VSMain";
+		l_Description.PixelShader = "DebugLine.PSMain";
+		l_Description.RenderTargetFormats[0] = D3D12SceneTarget::k_Format;
+		l_Description.RenderTargetCount = 1;
+		l_Description.DepthFormat = D3D12DepthBuffer::k_Format;
+		l_Description.SampleCount = renderer.GetSceneTarget().GetSampleCount();
+		l_Description.Topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+		l_Description.CullMode = D3D12_CULL_MODE_NONE;
+		l_Description.DepthTest = true;
+		l_Description.DepthWrite = false;
+		l_Description.Blend = BlendMode::AlphaBlend;
+
+		m_Pipeline = l_Cache.GetGraphicsPipeline(l_Description);
+		if (m_Pipeline == nullptr)
 		{
 			Shutdown();
 
@@ -69,19 +81,9 @@ namespace Powertrain
 
 	void DebugDrawPass::Shutdown()
 	{
-		for (FrameBuffer& l_Frame : m_VertexBuffers)
-		{
-			if (l_Frame.Mapped != nullptr)
-			{
-				l_Frame.Buffer->Unmap(0, nullptr);
-				l_Frame.Mapped = nullptr;
-			}
-
-			l_Frame.Buffer.Reset();
-		}
-
-		m_PipelineState.Reset();
-		m_RootSignature.Reset();
+		m_Pipeline = nullptr;
+		m_RootSignature = nullptr;
+		m_Renderer = nullptr;
 
 		m_Vertices.clear();
 		m_DroppedVertices = 0;
@@ -95,11 +97,10 @@ namespace Powertrain
 		m_Initialized = false;
 	}
 
-	void DebugDrawPass::Render(ID3D12GraphicsCommandList* commandList, uint32_t frameIndex, const Matrix4& viewProjection)
+	void DebugDrawPass::Render(ID3D12GraphicsCommandList* commandList, D3D12_GPU_VIRTUAL_ADDRESS frameConstants)
 	{
-		PT_CORE_ASSERT(frameIndex < D3D12::k_FramesInFlight, "Frame index {} out of range", frameIndex);
-
 		m_DrawCalls = 0;
+
 
 		if (m_DroppedVertices != 0)
 		{
@@ -114,21 +115,40 @@ namespace Powertrain
 			m_OverflowWarned = false;
 		}
 
-		if (m_Initialized && !m_Vertices.empty())
+		// The lines need the frame's view-projection, which RenderScene wrote; without it there is nothing to draw with
+		if (m_Initialized && !m_Vertices.empty() && frameConstants != 0)
 		{
-			// The renderer waited on this frame index's fence in BeginFrame, so the GPU is done reading this buffer
-			FrameBuffer& l_Frame = m_VertexBuffers[frameIndex];
-			std::memcpy(l_Frame.Mapped, m_Vertices.data(), m_Vertices.size() * sizeof(LineVertex));
+			const UploadAllocation l_Allocation = m_Renderer->GetUploadRing().Allocate(m_Vertices.size() * sizeof(LineVertex));
+			const DescriptorHandle l_Descriptor = l_Allocation.IsValid() ? m_Renderer->GetResourceHeap().AllocateTransient() : DescriptorHandle();
+			if (l_Descriptor.IsValid())
+			{
+				std::memcpy(l_Allocation.Cpu, m_Vertices.data(), m_Vertices.size() * sizeof(LineVertex));
 
-			commandList->SetGraphicsRootSignature(m_RootSignature.Get());
-			commandList->SetPipelineState(m_PipelineState.Get());
-			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-			commandList->SetGraphicsRoot32BitConstants(0, 16, &viewProjection, 0);
-			commandList->SetGraphicsRootShaderResourceView(1, l_Frame.Buffer->GetGPUVirtualAddress());
-			commandList->DrawInstanced(static_cast<UINT>(m_Vertices.size()), 1, 0, 0);
+				// The ring slice becomes a structured buffer the shader reaches through the descriptor in the root constants
+				D3D12_SHADER_RESOURCE_VIEW_DESC l_View = {};
+				l_View.Format = DXGI_FORMAT_UNKNOWN;
+				l_View.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+				l_View.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+				l_View.Buffer.FirstElement = l_Allocation.Offset / sizeof(LineVertex);
+				l_View.Buffer.NumElements = static_cast<UINT>(m_Vertices.size());
+				l_View.Buffer.StructureByteStride = sizeof(LineVertex);
+				l_View.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+				m_Renderer->GetDevice().GetHandle()->CreateShaderResourceView(l_Allocation.Resource, &l_View, l_Descriptor.CPU);
 
-			m_DrawCalls = 1;
+				ShaderInterop::DrawConstants l_Draw = {};
+				l_Draw.VertexBufferIndex = l_Descriptor.Index;
+
+				commandList->SetGraphicsRootSignature(m_RootSignature);
+				commandList->SetPipelineState(m_Pipeline);
+				commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+				commandList->SetGraphicsRootConstantBufferView(D3D12PipelineCache::k_FrameConstantsParameter, frameConstants);
+				commandList->SetGraphicsRoot32BitConstants(D3D12PipelineCache::k_DrawConstantsParameter, D3D12PipelineCache::k_DrawConstantCount, &l_Draw, 0);
+				commandList->DrawInstanced(static_cast<UINT>(m_Vertices.size()), 1, 0, 0);
+
+				m_DrawCalls = 1;
+			}
 		}
+
 
 		m_Vertices.clear();
 		m_DroppedVertices = 0;
@@ -223,145 +243,6 @@ namespace Powertrain
 				l_Previous = l_Point;
 			}
 		}
-	}
-
-	bool DebugDrawPass::CreateRootSignature(ID3D12Device* device)
-	{
-		// 0: 16 root constants for the view-projection, 1: root SRV for the vertex buffer; both read by the vertex shader only
-		D3D12_ROOT_PARAMETER l_Parameters[2] = {};
-		l_Parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-		l_Parameters[0].Constants.ShaderRegister = 0;
-		l_Parameters[0].Constants.RegisterSpace = 0;
-		l_Parameters[0].Constants.Num32BitValues = 16;
-		l_Parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-
-		l_Parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-		l_Parameters[1].Descriptor.ShaderRegister = 0;
-		l_Parameters[1].Descriptor.RegisterSpace = 0;
-		l_Parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-
-		D3D12_ROOT_SIGNATURE_DESC l_Description = {};
-		l_Description.NumParameters = 2;
-		l_Description.pParameters = l_Parameters;
-		l_Description.NumStaticSamplers = 0;
-		l_Description.pStaticSamplers = nullptr;
-		l_Description.Flags = D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS | D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS | D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS | D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
-
-		ComPtr<ID3DBlob> l_Serialized;
-		ComPtr<ID3DBlob> l_Error;
-		const HRESULT l_Result = D3D12SerializeRootSignature(&l_Description, D3D_ROOT_SIGNATURE_VERSION_1, &l_Serialized, &l_Error);
-		if (FAILED(l_Result))
-		{
-			if (l_Error)
-			{
-				PT_CORE_ERROR("Debug draw root signature: {}", static_cast<const char*>(l_Error->GetBufferPointer()));
-			}
-
-			return D3D12::CheckResult(l_Result, "D3D12SerializeRootSignature (debug draw)");
-		}
-
-		if (!D3D12::CheckResult(device->CreateRootSignature(0, l_Serialized->GetBufferPointer(), l_Serialized->GetBufferSize(), IID_PPV_ARGS(&m_RootSignature)), "CreateRootSignature (debug draw)"))
-		{
-			return false;
-		}
-
-		D3D12::SetDebugName(m_RootSignature.Get(), "Debug Draw Root Signature");
-
-		return true;
-	}
-
-	bool DebugDrawPass::CreatePipelineState(ID3D12Device* device, const std::vector<uint8_t>& vertexShader, const std::vector<uint8_t>& pixelShader)
-	{
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC l_Description = {};
-		l_Description.pRootSignature = m_RootSignature.Get();
-		l_Description.VS = { vertexShader.data(), vertexShader.size() };
-		l_Description.PS = { pixelShader.data(), pixelShader.size() };
-
-		// Straight alpha blend so translucent lines work; colours are linear and the sRGB RTV encodes on write
-		D3D12_RENDER_TARGET_BLEND_DESC& l_Blend = l_Description.BlendState.RenderTarget[0];
-		l_Blend.BlendEnable = TRUE;
-		l_Blend.LogicOpEnable = FALSE;
-		l_Blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
-		l_Blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-		l_Blend.BlendOp = D3D12_BLEND_OP_ADD;
-		l_Blend.SrcBlendAlpha = D3D12_BLEND_ONE;
-		l_Blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-		l_Blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-		l_Blend.LogicOp = D3D12_LOGIC_OP_NOOP;
-		l_Blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
-		l_Description.BlendState.AlphaToCoverageEnable = FALSE;
-		l_Description.BlendState.IndependentBlendEnable = FALSE;
-		l_Description.SampleMask = UINT_MAX;
-		l_Description.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-		l_Description.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-		l_Description.RasterizerState.FrontCounterClockwise = FALSE;
-		l_Description.RasterizerState.DepthClipEnable = TRUE;
-		l_Description.RasterizerState.MultisampleEnable = FALSE;
-		l_Description.RasterizerState.AntialiasedLineEnable = FALSE;
-		l_Description.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-		l_Description.DepthStencilState.DepthEnable = TRUE;
-		l_Description.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-		l_Description.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
-		l_Description.DepthStencilState.StencilEnable = FALSE;
-		l_Description.InputLayout = { nullptr, 0 };
-		l_Description.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
-		l_Description.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-		l_Description.NumRenderTargets = 1;
-		l_Description.RTVFormats[0] = D3D12SwapChain::k_RtvFormat;
-		l_Description.DSVFormat = D3D12DepthBuffer::k_Format;
-		l_Description.SampleDesc = { 1, 0 };
-		l_Description.NodeMask = 0;
-
-		if (!D3D12::CheckResult(device->CreateGraphicsPipelineState(&l_Description, IID_PPV_ARGS(&m_PipelineState)), "CreateGraphicsPipelineState (debug draw)"))
-		{
-			return false;
-		}
-
-		D3D12::SetDebugName(m_PipelineState.Get(), "Debug Draw Pipeline");
-
-		return true;
-	}
-
-	bool DebugDrawPass::CreateVertexBuffers(ID3D12Device* device)
-	{
-		D3D12_HEAP_PROPERTIES l_HeapProperties = {};
-		l_HeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-		D3D12_RESOURCE_DESC l_BufferDescription = {};
-		l_BufferDescription.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-		l_BufferDescription.Width = static_cast<uint64_t>(k_MaxVertices) * sizeof(LineVertex);
-		l_BufferDescription.Height = 1;
-		l_BufferDescription.DepthOrArraySize = 1;
-		l_BufferDescription.MipLevels = 1;
-		l_BufferDescription.Format = DXGI_FORMAT_UNKNOWN;
-		l_BufferDescription.SampleDesc = { 1, 0 };
-		l_BufferDescription.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-		l_BufferDescription.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-		for (uint32_t l_Index = 0; l_Index < D3D12::k_FramesInFlight; ++l_Index)
-		{
-			FrameBuffer& l_Frame = m_VertexBuffers[l_Index];
-
-			if (!D3D12::CheckResult(device->CreateCommittedResource(&l_HeapProperties, D3D12_HEAP_FLAG_NONE, &l_BufferDescription, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&l_Frame.Buffer)), std::format("CreateCommittedResource (debug draw vertices {})", l_Index)))
-			{
-				return false;
-			}
-
-			D3D12::SetDebugName(l_Frame.Buffer.Get(), std::format("Debug Draw Vertices {}", l_Index));
-
-			// Upload heaps stay mapped for their whole life; the CPU never reads them back
-			const D3D12_RANGE l_NoRead = { 0, 0 };
-			void* l_Mapped = nullptr;
-			if (!D3D12::CheckResult(l_Frame.Buffer->Map(0, &l_NoRead, &l_Mapped), "ID3D12Resource::Map (debug draw vertices)"))
-			{
-				return false;
-			}
-
-			l_Frame.Mapped = static_cast<LineVertex*>(l_Mapped);
-		}
-
-		return true;
 	}
 
 	void DebugDrawPass::Push(const Vector3& from, const Vector3& to, uint32_t color)

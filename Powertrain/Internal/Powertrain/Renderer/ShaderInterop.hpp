@@ -37,6 +37,8 @@ namespace Powertrain
 		static_assert(sizeof(InstanceData) == 64, "InstanceData must be one matrix so the ring offset divides into whole instances");
 		static_assert(sizeof(MaterialData) == 64, "MaterialData must stay 64 bytes so the ring offset divides into whole materials");
 		static_assert(sizeof(ShadowPassConstants) % 16 == 0, "ShadowPassConstants must fill whole 16-byte constant registers");
+		static_assert(sizeof(EnvironmentPassConstants) % 16 == 0, "EnvironmentPassConstants must fill whole 16-byte constant registers");
+		static_assert(sizeof(PostPassConstants) % 16 == 0, "PostPassConstants must fill whole 16-byte constant registers");
 		static_assert(sizeof(FrameConstants) % 16 == 0, "FrameConstants must fill whole 16-byte constant registers");
 		static_assert(k_ShadowCascadeCount == 4, "ShadowSplits and ShadowTexelSizes are float4s, one lane per cascade");
 	}

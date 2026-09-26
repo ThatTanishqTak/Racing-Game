@@ -2,22 +2,27 @@
 
 #include "Powertrain/Renderer/Camera.hpp"
 #include "Powertrain/Renderer/DebugDrawPass.hpp"
+#include "Powertrain/Renderer/EnvironmentPass.hpp"
 #include "Powertrain/Renderer/ForwardPass.hpp"
 #include "Powertrain/Renderer/ImGuiPass.hpp"
+#include "Powertrain/Renderer/PostPass.hpp"
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/Renderer/SceneRenderer.hpp"
 #include "Powertrain/Renderer/ShaderInterop.hpp"
 #include "Powertrain/Renderer/ShadowPass.hpp"
+#include "Powertrain/Renderer/SkyPass.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DeferredReleaseQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DepthBuffer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DescriptorHeap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Device.hpp"
+#include "Powertrain/RHI/D3D12/D3D12EnvironmentMaps.hpp"
 #include "Powertrain/RHI/D3D12/D3D12GpuTimer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12MaterialStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12MeshStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
+#include "Powertrain/RHI/D3D12/D3D12SceneTarget.hpp"
 #include "Powertrain/RHI/D3D12/D3D12ShadowMap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
 #include "Powertrain/RHI/D3D12/D3D12TextureStorage.hpp"
@@ -75,7 +80,7 @@ namespace Powertrain
 
 		void SetVSync(bool enabled) override;
 		bool IsVSyncEnabled() const override { return m_SwapChain.IsVSyncEnabled(); }
-		void SetClearColor(const Color& color) override { m_ClearColor = color; }
+		void SetClearColor(const Color& color) override;
 		void SetEnvironment(const EnvironmentSettings& environment) override { m_Environment = environment; }
 
 		DebugDraw& GetDebugDraw() override { return m_DebugDrawPass; }
@@ -96,8 +101,10 @@ namespace Powertrain
 		D3D12GpuTimer& GetGpuTimer() { return m_GpuTimer; }
 		D3D12UploadRing& GetUploadRing() { return m_UploadRing; }
 		D3D12PipelineCache& GetPipelineCache() { return m_PipelineCache; }
+		D3D12SceneTarget& GetSceneTarget() { return m_SceneTarget; }
 		D3D12DepthBuffer& GetDepthBuffer() { return m_DepthBuffer; }
 		D3D12ShadowMap& GetShadowMap() { return m_ShadowMap; }
+		D3D12EnvironmentMaps& GetEnvironmentMaps() { return m_EnvironmentMaps; }
 		D3D12MeshStorage& GetMeshStorage() { return m_Meshes; }
 		const D3D12MeshStorage& GetMeshStorage() const { return m_Meshes; }
 		D3D12TextureStorage& GetTextureStorage() { return m_Textures; }
@@ -116,6 +123,7 @@ namespace Powertrain
 		bool CreateSamplers();
 		void DestroySamplers();
 		void BindSceneTargets(ID3D12GraphicsCommandList* commandList);
+		void ResolveScene(ID3D12GraphicsCommandList* commandList);
 
 	private:
 		D3D12Device m_Device;
@@ -129,8 +137,10 @@ namespace Powertrain
 		D3D12SwapChain m_SwapChain;
 		D3D12DeferredReleaseQueue m_DeferredRelease;
 		D3D12GpuTimer m_GpuTimer;
+		D3D12SceneTarget m_SceneTarget;
 		D3D12DepthBuffer m_DepthBuffer;
 		D3D12ShadowMap m_ShadowMap;
+		D3D12EnvironmentMaps m_EnvironmentMaps;
 		D3D12UploadRing m_UploadRing;
 		D3D12PipelineCache m_PipelineCache;
 		D3D12MeshStorage m_Meshes;
@@ -138,10 +148,14 @@ namespace Powertrain
 		D3D12MaterialStorage m_Materials;
 		std::array<DescriptorHandle, ShaderInterop::k_SamplerCount> m_Samplers;
 		SceneRenderer m_SceneRenderer;
+		EnvironmentPass m_EnvironmentPass;
 		ShadowPass m_ShadowPass;
 		ForwardPass m_ForwardPass;
+		SkyPass m_SkyPass;
 		DebugDrawPass m_DebugDrawPass;
+		PostPass m_PostPass;
 		ImGuiPass m_ImGuiPass;
+
 
 		uint32_t m_FrameDrawCalls = 0;
 		uint32_t m_FrameTriangles = 0;
@@ -158,9 +172,11 @@ namespace Powertrain
 		uint32_t m_PendingWidth = 0;
 		uint32_t m_PendingHeight = 0;
 		bool m_ResizePending = false;
+		bool m_TargetsDirty = false;
 
 		bool m_Initialized = false;
 		bool m_InFrame = false;
+		bool m_SceneResolved = false;
 		bool m_FrameSlotAcquired = false;
 		bool m_DeviceLost = false;
 	};

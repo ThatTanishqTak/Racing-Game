@@ -25,6 +25,11 @@ namespace
 	// Where the light comes from, in the direction it travels
 	constexpr Powertrain::Vector3 k_SunDirection = { -0.3f, -1.0f, -0.2f };
 
+	// The animated sun circles the scene while its elevation breathes between the two limits
+	constexpr float k_SunAngularSpeed = 0.25f;
+	constexpr float k_SunMinElevation = Powertrain::Math::ToRadians(8.0f);
+	constexpr float k_SunMaxElevation = Powertrain::Math::ToRadians(60.0f);
+
 	// Lines sit a hair above the ground plane so the depth test does not flicker between them
 	constexpr float k_GridHeight = 0.01f;
 
@@ -112,6 +117,13 @@ void SandboxLayer::OnEvent(Powertrain::Event& event)
 			return true;
 		}
 
+		if (keyEvent.Key == Powertrain::KeyCode::L)
+		{
+			m_AnimateSun = !m_AnimateSun;
+
+			return true;
+		}
+
 		if (keyEvent.Key == Powertrain::KeyCode::V)
 		{
 			Powertrain::Renderer& l_Renderer = GetContext().GetRenderer();
@@ -144,6 +156,7 @@ void SandboxLayer::OnUpdate(Powertrain::Timestep deltaTime)
 	++m_FrameCount;
 
 	UpdateCamera(deltaTime);
+	UpdateSun(deltaTime);
 
 	const Powertrain::RendererStats& l_Stats = GetContext().GetRenderer().GetStats();
 	m_FrameHistory[m_FrameHistoryOffset] = static_cast<float>(l_Stats.CpuFrameMilliseconds);
@@ -340,6 +353,21 @@ void SandboxLayer::UpdateCamera(Powertrain::Timestep deltaTime)
 	}
 }
 
+void SandboxLayer::UpdateSun(Powertrain::Timestep deltaTime)
+{
+	if (!m_AnimateSun || !m_Scene->IsAlive(m_Sun))
+	{
+		return;
+	}
+
+	m_SunAngle += k_SunAngularSpeed * deltaTime.SecondsF();
+
+	// The travel direction, aimed the same way BuildScene aims the static sun
+	const float l_Elevation = Powertrain::Math::Lerp(k_SunMinElevation, k_SunMaxElevation, 0.5f + 0.5f * std::sin(m_SunAngle * 0.5f));
+	const Powertrain::Vector3 l_Travel = { -std::cos(l_Elevation) * std::cos(m_SunAngle), -std::sin(l_Elevation), -std::cos(l_Elevation) * std::sin(m_SunAngle) };
+	m_Scene->GetRegistry().Get<Powertrain::TransformComponent>(m_Sun).Teleport({ 0.0f, 10.0f, 0.0f }, Powertrain::Quaternion::LookRotation(l_Travel, Powertrain::Vector3::Up()));
+}
+
 void SandboxLayer::DrawDebugOverlay()
 {
 	Powertrain::DebugDraw& l_Draw = GetContext().GetRenderer().GetDebugDraw();
@@ -394,7 +422,12 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::PlotLines("##FrameTimes", m_FrameHistory.data(), static_cast<int>(k_FrameHistoryCount), static_cast<int>(m_FrameHistoryOffset), nullptr, 0.0f, 33.3f, ImVec2(240.0f, 60.0f));
 		ImGui::Separator();
 
-		ImGui::Text("Draw calls %u (%u shadow)   Triangles %u", l_Stats.DrawCalls, l_Stats.ShadowDrawCalls, l_Stats.Triangles);
+		// Per-pass GPU times for the last whole frame; the environment bake reads zero on the frames it skips
+		ImGui::Text("Shadow %5.2f  Forward %5.2f  Sky %5.2f ms", l_Stats.GpuShadowMilliseconds, l_Stats.GpuForwardMilliseconds, l_Stats.GpuSkyMilliseconds);
+		ImGui::Text("Lines  %5.2f  Post    %5.2f  Bake %5.2f ms (%u bakes)", l_Stats.GpuDebugDrawMilliseconds, l_Stats.GpuPostMilliseconds, l_Stats.GpuEnvironmentMilliseconds, l_Stats.EnvironmentBakes);
+		ImGui::Separator();
+
+		ImGui::Text("Draw calls %u (%u shadow)   Triangles %u   MSAA %ux", l_Stats.DrawCalls, l_Stats.ShadowDrawCalls, l_Stats.Triangles, l_Stats.SampleCount);
 		ImGui::Text("Instances %u drawn, %u culled", l_Stats.Instances, l_Stats.CulledInstances);
 		ImGui::Text("Meshes %u   Textures %u   Materials %u   GPU %llu KB", l_Stats.Meshes, l_Stats.Textures, l_Stats.Materials, static_cast<unsigned long long>(l_Stats.GpuMemoryBytes / 1024));
 		ImGui::Text("Frame %llu", static_cast<unsigned long long>(l_Stats.FrameIndex));
@@ -403,7 +436,7 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::Separator();
 
 		ImGui::TextDisabled("F1 stats  F2 demo  F3 grid and axes  wheel zoom  V vsync  F11 fullscreen");
-		ImGui::TextDisabled("Delete destroys the car and its children  R rebuilds");
+		ImGui::TextDisabled("Delete destroys the car and its children  R rebuilds  L swings the sun");
 	}
 	ImGui::End();
 }

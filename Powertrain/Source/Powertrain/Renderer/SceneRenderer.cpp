@@ -139,7 +139,11 @@ namespace Powertrain
 		m_Camera.Projection = Matrix4::Perspective(m_Camera.VerticalFov, aspectRatio, m_Camera.NearPlane);
 		m_Camera.ViewProjection = m_Camera.View * m_Camera.Projection;
 		m_Camera.Frustum = Frustum::FromViewProjection(m_Camera.ViewProjection);
+
+		// The sky pass unprojects pixels back into world directions with this
+		m_Camera.InverseViewProjection = m_Camera.ViewProjection.Inverse();
 	}
+
 
 	void SceneRenderer::ResolveSun(Scene* scene)
 	{

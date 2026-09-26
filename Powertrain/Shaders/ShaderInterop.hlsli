@@ -10,6 +10,8 @@ struct Vertex
 };
 #endif
 
+static const float k_Pi = 3.14159265f;
+
 static const uint k_VertexStride = 48;
 static const uint k_SamplerLinearWrap = 0;
 static const uint k_SamplerLinearClamp = 1;
@@ -19,6 +21,7 @@ static const uint k_SamplerShadow = 4;
 static const uint k_SamplerCount = 5;
 static const uint k_MaterialFlagAlphaMask = 1;
 static const uint k_ShadowCascadeCount = 4;
+static const uint k_CubeFaceCount = 6;
 
 struct DrawConstants
 {
@@ -59,19 +62,32 @@ struct ShadowPassConstants
     uint4 Cascade;
 };
 
+struct EnvironmentPassConstants
+{
+    uint4 Target;
+    float4 Filter;
+};
+
+struct PostPassConstants
+{
+    float4 Params;
+};
+
 struct FrameConstants
 {
     row_major float4x4 View;
     row_major float4x4 Projection;
     row_major float4x4 ViewProjection;
-    
+    row_major float4x4 InverseViewProjection;
+
     float4 CameraPosition;
     float4 SunDirection;
     float4 SunColor;
-    float4 AmbientColor;
+    float4 SkyTint;
     float4 ViewportSize;
-    
+
     uint4 FrameInfo;
+    uint4 EnvironmentInfo;
 
     row_major float4x4 ShadowMatrices[k_ShadowCascadeCount];
     float4 ShadowSplits;

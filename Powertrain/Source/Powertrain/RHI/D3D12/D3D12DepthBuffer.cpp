@@ -10,12 +10,14 @@ namespace Powertrain
 		Shutdown();
 	}
 
-	bool D3D12DepthBuffer::Initialize(D3D12Device& device, D3D12DescriptorHeap& dsvHeap, uint32_t width, uint32_t height)
+	bool D3D12DepthBuffer::Initialize(D3D12Device& device, D3D12DescriptorHeap& dsvHeap, uint32_t width, uint32_t height, uint32_t sampleCount)
 	{
 		PT_CORE_ASSERT(dsvHeap.GetType() == D3D12_DESCRIPTOR_HEAP_TYPE_DSV, "Depth buffer needs the DSV heap");
+		PT_CORE_ASSERT(sampleCount > 0, "Depth buffer sample count {} is invalid", sampleCount);
 
 		m_Device = &device;
 		m_DsvHeap = &dsvHeap;
+		m_SampleCount = sampleCount;
 
 		if (!Create(width, height))
 		{
@@ -24,7 +26,7 @@ namespace Powertrain
 			return false;
 		}
 
-		PT_CORE_INFO("Depth buffer ready: {}x{} D32", width, height);
+		PT_CORE_INFO("Depth buffer ready: {}x{} D32, {}x MSAA", width, height, m_SampleCount);
 
 		return true;
 	}
@@ -35,7 +37,9 @@ namespace Powertrain
 
 		m_Device = nullptr;
 		m_DsvHeap = nullptr;
+		m_SampleCount = 1;
 	}
+
 
 	bool D3D12DepthBuffer::Resize(uint32_t width, uint32_t height)
 	{
@@ -68,7 +72,7 @@ namespace Powertrain
 		l_Description.DepthOrArraySize = 1;
 		l_Description.MipLevels = 1;
 		l_Description.Format = k_Format;
-		l_Description.SampleDesc = { 1, 0 };
+		l_Description.SampleDesc = { m_SampleCount, 0 };
 		l_Description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 		l_Description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
 
@@ -91,9 +95,10 @@ namespace Powertrain
 			return false;
 		}
 
+		// A multisampled view has no mip to pick; the single-sample view names mip 0
 		D3D12_DEPTH_STENCIL_VIEW_DESC l_View = {};
 		l_View.Format = k_Format;
-		l_View.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+		l_View.ViewDimension = m_SampleCount > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMS : D3D12_DSV_DIMENSION_TEXTURE2D;
 		l_View.Flags = D3D12_DSV_FLAG_NONE;
 		l_View.Texture2D.MipSlice = 0;
 

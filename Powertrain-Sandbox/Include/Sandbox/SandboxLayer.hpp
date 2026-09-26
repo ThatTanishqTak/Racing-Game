@@ -28,6 +28,7 @@ private:
 	void BuildCar();
 	void ParseSampleJson();
 	void UpdateCamera(Powertrain::Timestep deltaTime);
+	void UpdateSun(Powertrain::Timestep deltaTime);
 	void DrawDebugOverlay();
 	void DrawStatsPanel();
 
@@ -50,6 +51,10 @@ private:
 	float m_CameraYaw = 0.0f;
 	float m_CameraDistance = 14.0f;
 	Powertrain::Entity m_Camera;
+
+	// L swings the sun around the scene, which rebakes the sky maps and moves the shadows every frame
+	float m_SunAngle = 0.0f;
+	bool m_AnimateSun = false;
 
 	// Unit meshes scaled through TransformComponent, so three meshes dress every entity
 	Powertrain::MeshHandle m_BoxMesh;

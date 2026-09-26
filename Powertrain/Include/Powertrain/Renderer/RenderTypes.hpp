@@ -97,6 +97,12 @@ namespace Powertrain
 	{
 		double CpuFrameMilliseconds = 0.0;
 		double GpuFrameMilliseconds = 0.0;
+		double GpuEnvironmentMilliseconds = 0.0;
+		double GpuShadowMilliseconds = 0.0;
+		double GpuForwardMilliseconds = 0.0;
+		double GpuSkyMilliseconds = 0.0;
+		double GpuDebugDrawMilliseconds = 0.0;
+		double GpuPostMilliseconds = 0.0;
 		uint32_t DrawCalls = 0;
 		uint32_t Triangles = 0;
 		uint32_t ShadowDrawCalls = 0;
@@ -107,5 +113,7 @@ namespace Powertrain
 		uint32_t Materials = 0;
 		uint64_t GpuMemoryBytes = 0;
 		uint64_t FrameIndex = 0;
+		uint32_t EnvironmentBakes = 0;
+		uint32_t SampleCount = 1;
 	};
 }

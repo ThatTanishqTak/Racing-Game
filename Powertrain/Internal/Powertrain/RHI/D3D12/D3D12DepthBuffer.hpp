@@ -21,7 +21,7 @@ namespace Powertrain
 		D3D12DepthBuffer(const D3D12DepthBuffer&) = delete;
 		D3D12DepthBuffer& operator=(const D3D12DepthBuffer&) = delete;
 
-		bool Initialize(D3D12Device& device, D3D12DescriptorHeap& dsvHeap, uint32_t width, uint32_t height);
+		bool Initialize(D3D12Device& device, D3D12DescriptorHeap& dsvHeap, uint32_t width, uint32_t height, uint32_t sampleCount);
 		void Shutdown();
 
 		bool Resize(uint32_t width, uint32_t height);
@@ -31,6 +31,7 @@ namespace Powertrain
 		ID3D12Resource* GetResource() const { return m_Resource.Get(); }
 		uint32_t GetWidth() const { return m_Width; }
 		uint32_t GetHeight() const { return m_Height; }
+		uint32_t GetSampleCount() const { return m_SampleCount; }
 
 	private:
 		bool Create(uint32_t width, uint32_t height);
@@ -45,5 +46,6 @@ namespace Powertrain
 
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
+		uint32_t m_SampleCount = 1;
 	};
 }

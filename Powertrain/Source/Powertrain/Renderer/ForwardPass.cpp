@@ -5,6 +5,7 @@
 #include "Powertrain/RHI/D3D12/D3D12DepthBuffer.hpp"
 #include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
+#include "Powertrain/RHI/D3D12/D3D12SceneTarget.hpp"
 
 namespace Powertrain
 {
@@ -18,13 +19,14 @@ namespace Powertrain
 		D3D12PipelineCache& l_Cache = renderer.GetPipelineCache();
 		m_RootSignature = l_Cache.GetRootSignature();
 
-		// Opaque, back-face culled with counter-clockwise fronts, reversed-Z depth test and write into the swap chain until the MSAA target arrives
+		// Opaque, back-face culled with counter-clockwise fronts, reversed-Z depth test and write into the multisampled HDR scene target
 		GraphicsPipelineDescription l_Description;
 		l_Description.VertexShader = "Forward.VSMain";
 		l_Description.PixelShader = "Forward.PSMain";
-		l_Description.RenderTargetFormats[0] = D3D12SwapChain::k_RtvFormat;
+		l_Description.RenderTargetFormats[0] = D3D12SceneTarget::k_Format;
 		l_Description.RenderTargetCount = 1;
 		l_Description.DepthFormat = D3D12DepthBuffer::k_Format;
+		l_Description.SampleCount = renderer.GetSceneTarget().GetSampleCount();
 		l_Description.DepthTest = true;
 		l_Description.DepthWrite = true;
 
