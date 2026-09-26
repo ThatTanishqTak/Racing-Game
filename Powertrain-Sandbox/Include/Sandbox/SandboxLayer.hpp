@@ -22,6 +22,8 @@ public:
 	void OnImGuiRender() override;
 
 private:
+	void BuildScene();
+	void ParseSampleJson();
 	void UpdateCamera(Powertrain::Timestep deltaTime);
 	void DrawDebugScene();
 	void DrawStatsPanel();
@@ -44,7 +46,10 @@ private:
 	// Orbit camera for the debug scene; the wheel zooms
 	float m_CameraYaw = 0.0f;
 	float m_CameraDistance = 14.0f;
-	float m_BoxAngle = 0.0f;
+
+	// The entity scene: a spinning car-sized box with two children and a bobbing sphere beside it
+	Powertrain::Scene* m_Scene = nullptr;
+	Powertrain::Entity m_Car;
 
 	bool m_ShowStats = true;
 	bool m_ShowDemo = false;

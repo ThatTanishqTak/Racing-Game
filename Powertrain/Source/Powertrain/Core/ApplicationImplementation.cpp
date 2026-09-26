@@ -6,6 +6,7 @@
 #include "Powertrain/Platform/Windows/Input/WindowsInput.hpp"
 #include "Powertrain/Platform/Windows/WindowsWindow.hpp"
 #include "Powertrain/RHI/D3D12/D3D12Renderer.hpp"
+#include "Powertrain/Scene/SceneManager.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -56,7 +57,8 @@ namespace Powertrain
 			return false;
 		}
 
-		m_Context = std::make_unique<EngineContext>(*m_Window, *m_Input, *m_Renderer);
+		m_Scenes = std::make_unique<SceneManager>();
+		m_Context = std::make_unique<EngineContext>(*m_Window, *m_Input, *m_Renderer, *m_Scenes);
 		m_Initialized = true;
 
 		for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
@@ -106,6 +108,9 @@ namespace Powertrain
 					l_Layer->OnFixedUpdate(Timestep(l_FixedStep));
 				}
 
+				// Scene fixed stages: PrePhysics, Physics, PostPhysics
+				m_Scenes->FixedUpdate(Timestep(l_FixedStep));
+
 				m_Input->EndFixedStep();
 
 				l_Accumulator -= l_FixedStep;
@@ -119,11 +124,17 @@ namespace Powertrain
 				l_Accumulator = 0.0;
 			}
 
+			// How far the frame sits between the last tick and the next; TransformSystem blends with it
+			m_Scenes->SetInterpolationAlpha(static_cast<float>(l_Accumulator / l_FixedStep));
+
 			const Timestep l_DeltaTime(l_FrameTime);
 			for (const std::unique_ptr<Layer>& l_Layer : m_LayerStack)
 			{
 				l_Layer->OnUpdate(l_DeltaTime);
 			}
+
+			// Scene frame stages: Update, then PreRender writes the world transforms the layers draw from
+			m_Scenes->Update(l_DeltaTime);
 
 			bool l_Rendered = m_Renderer->BeginFrame();
 			if (l_Rendered)
@@ -153,6 +164,9 @@ namespace Powertrain
 				m_Context->RequestExit();
 			}
 
+			// Entity destruction and scene switches requested this frame land here, never while systems iterate
+			m_Scenes->FlushDeferredChanges();
+
 			FlushPendingLayers();
 		}
 
@@ -176,6 +190,8 @@ namespace Powertrain
 
 		m_LayerStack.clear();
 		m_LayerInsertIndex = 0;
+
+		m_Scenes.reset();
 		m_Context.reset();
 
 		if (m_Renderer)

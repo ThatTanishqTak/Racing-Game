@@ -13,6 +13,7 @@ namespace Powertrain
 	class WindowsWindow;
 	class WindowsInput;
 	class D3D12Renderer;
+	class SceneManager;
 
 	class ApplicationImplementation
 	{
@@ -48,6 +49,7 @@ namespace Powertrain
 		std::unique_ptr<WindowsWindow> m_Window;
 		std::unique_ptr<WindowsInput> m_Input;
 		std::unique_ptr<D3D12Renderer> m_Renderer;
+		std::unique_ptr<SceneManager> m_Scenes;
 		std::unique_ptr<EngineContext> m_Context;
 
 		std::vector<std::unique_ptr<Layer>> m_LayerStack;

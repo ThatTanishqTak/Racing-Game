@@ -19,7 +19,7 @@ namespace Powertrain
 	{
 		constexpr uint32_t k_SphereSegments = 32;
 		constexpr float k_ArrowHeadFraction = 0.2f;
-		constexpr float k_Epsilon = 1e-6f;
+		constexpr float k_Epsilon = Math::k_Epsilon;
 
 		// Matrix4 is uploaded raw as 16 root constants
 		static_assert(sizeof(Matrix4) == 16 * sizeof(float), "Matrix4 must be 16 floats");
@@ -37,55 +37,6 @@ namespace Powertrain
 			bytes.assign(std::istreambuf_iterator<char>(l_File), std::istreambuf_iterator<char>());
 
 			return !bytes.empty();
-		}
-
-		// Vector3 is a placeholder without operators until M5, so the little maths the batcher needs lives here
-		Vector3 Add(const Vector3& a, const Vector3& b) { return { a.X + b.X, a.Y + b.Y, a.Z + b.Z }; }
-		Vector3 Subtract(const Vector3& a, const Vector3& b) { return { a.X - b.X, a.Y - b.Y, a.Z - b.Z }; }
-		Vector3 Scale(const Vector3& v, float s) { return { v.X * s, v.Y * s, v.Z * s }; }
-		float Length(const Vector3& v) { return std::sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z); }
-
-		Vector3 Cross(const Vector3& a, const Vector3& b)
-		{
-			return { a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X };
-		}
-
-		Vector3 Normalize(const Vector3& v)
-		{
-			const float l_Length = Length(v);
-
-			return l_Length > k_Epsilon ? Scale(v, 1.0f / l_Length) : Vector3{ 0.0f, 0.0f, 0.0f };
-		}
-
-		// Any unit vector at right angles to a unit direction
-		Vector3 Perpendicular(const Vector3& direction)
-		{
-			const float l_AbsX = std::abs(direction.X);
-			const float l_AbsY = std::abs(direction.Y);
-			const float l_AbsZ = std::abs(direction.Z);
-
-			Vector3 l_Axis = { 1.0f, 0.0f, 0.0f };
-			if (l_AbsY <= l_AbsX && l_AbsY <= l_AbsZ)
-			{
-				l_Axis = { 0.0f, 1.0f, 0.0f };
-			}
-			else if (l_AbsZ <= l_AbsX && l_AbsZ <= l_AbsY)
-			{
-				l_Axis = { 0.0f, 0.0f, 1.0f };
-			}
-
-			return Normalize(Cross(direction, l_Axis));
-		}
-
-		// Row-vector convention: p' = p * M, translation in row 3
-		Vector3 TransformPoint(const Matrix4& m, const Vector3& p)
-		{
-			return
-			{
-				p.X * m.M[0][0] + p.Y * m.M[1][0] + p.Z * m.M[2][0] + m.M[3][0],
-				p.X * m.M[0][1] + p.Y * m.M[1][1] + p.Z * m.M[2][1] + m.M[3][1],
-				p.X * m.M[0][2] + p.Y * m.M[1][2] + p.Z * m.M[2][2] + m.M[3][2]
-			};
 		}
 
 		// RGBA8 with R in the low byte; DebugLine.hlsl unpacks in the same order
@@ -213,27 +164,28 @@ namespace Powertrain
 	void DebugDrawPass::Arrow(const Vector3& origin, const Vector3& vector, const Color& color)
 	{
 		const uint32_t l_Color = PackColor(color);
-		const Vector3 l_Tip = Add(origin, vector);
+		const Vector3 l_Tip = origin + vector;
 		Push(origin, l_Tip, l_Color);
 
-		const float l_Length = Length(vector);
+		const float l_Length = vector.Length();
 		if (l_Length <= k_Epsilon)
 		{
 			return;
 		}
 
 		// Four head lines from the tip back to a square around the shaft
-		const Vector3 l_Direction = Scale(vector, 1.0f / l_Length);
+		const Vector3 l_Direction = vector / l_Length;
 		const float l_HeadLength = l_Length * k_ArrowHeadFraction;
 		const float l_HeadWidth = l_HeadLength * 0.5f;
-		const Vector3 l_Base = Subtract(l_Tip, Scale(l_Direction, l_HeadLength));
-		const Vector3 l_Side = Scale(Perpendicular(l_Direction), l_HeadWidth);
-		const Vector3 l_Up = Scale(Cross(l_Direction, Perpendicular(l_Direction)), l_HeadWidth);
+		const Vector3 l_Base = l_Tip - l_Direction * l_HeadLength;
+		const Vector3 l_Perpendicular = l_Direction.Perpendicular();
+		const Vector3 l_Side = l_Perpendicular * l_HeadWidth;
+		const Vector3 l_Up = Vector3::Cross(l_Direction, l_Perpendicular) * l_HeadWidth;
 
-		Push(l_Tip, Add(l_Base, l_Side), l_Color);
-		Push(l_Tip, Subtract(l_Base, l_Side), l_Color);
-		Push(l_Tip, Add(l_Base, l_Up), l_Color);
-		Push(l_Tip, Subtract(l_Base, l_Up), l_Color);
+		Push(l_Tip, l_Base + l_Side, l_Color);
+		Push(l_Tip, l_Base - l_Side, l_Color);
+		Push(l_Tip, l_Base + l_Up, l_Color);
+		Push(l_Tip, l_Base - l_Up, l_Color);
 	}
 
 	void DebugDrawPass::Box(const Matrix4& transform, const Vector3& halfExtents, const Color& color)
@@ -251,7 +203,7 @@ namespace Powertrain
 				(l_Index & 4) ? halfExtents.Z : -halfExtents.Z
 			};
 
-			l_Corners[l_Index] = TransformPoint(transform, l_Local);
+			l_Corners[l_Index] = transform.TransformPoint(l_Local);
 		}
 
 		// Each edge joins two corners that differ in exactly one bit; walking from the 0 side gives every edge once
@@ -283,11 +235,11 @@ namespace Powertrain
 
 		for (const auto& l_Pair : l_Axes)
 		{
-			Vector3 l_Previous = Add(center, Scale(l_Pair[0], radius));
+			Vector3 l_Previous = center + l_Pair[0] * radius;
 			for (uint32_t l_Segment = 1; l_Segment <= k_SphereSegments; ++l_Segment)
 			{
 				const float l_Angle = l_Step * static_cast<float>(l_Segment);
-				const Vector3 l_Point = Add(center, Add(Scale(l_Pair[0], radius * std::cos(l_Angle)), Scale(l_Pair[1], radius * std::sin(l_Angle))));
+				const Vector3 l_Point = center + l_Pair[0] * (radius * std::cos(l_Angle)) + l_Pair[1] * (radius * std::sin(l_Angle));
 
 				Push(l_Previous, l_Point, l_Color);
 				l_Previous = l_Point;
