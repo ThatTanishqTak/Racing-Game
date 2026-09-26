@@ -64,6 +64,55 @@ float3 TonemapAces(float3 color)
     return saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
 }
 
+float SampleSunShadow(float3 worldPosition, float3 normal, float nDotL)
+{
+    const uint l_CascadeCount = Frame.ShadowInfo.y;
+    if (l_CascadeCount == 0)
+    {
+        return 1.0;
+    }
+
+    const float l_ViewDepth = -mul(float4(worldPosition, 1.0), Frame.View).z;
+    const uint l_Cascade = (l_ViewDepth > Frame.ShadowSplits.x ? 1 : 0) + (l_ViewDepth > Frame.ShadowSplits.y ? 1 : 0) + (l_ViewDepth > Frame.ShadowSplits.z ? 1 : 0) + (l_ViewDepth > Frame.ShadowSplits.w ? 1 : 0);
+    if (l_Cascade >= l_CascadeCount)
+    {
+        return 1.0;
+    }
+
+    // Grazing light needs more offset than light along the normal
+    const float l_TexelWorldSize = Frame.ShadowTexelSizes[l_Cascade];
+    const float3 l_Offset = normal * (l_TexelWorldSize * Frame.ShadowParams.x * (1.0 - nDotL));
+    const float4 l_ShadowPosition = mul(float4(worldPosition + l_Offset, 1.0), Frame.ShadowMatrices[l_Cascade]);
+
+    const float2 l_Uv = l_ShadowPosition.xy * float2(0.5, -0.5) + 0.5;
+    if (any(l_Uv < 0.0) || any(l_Uv > 1.0))
+    {
+        return 1.0;
+    }
+
+    // Reversed-Z: the receiver is lit when its depth is at or above the stored depth, and the bias leans towards lit
+    const float l_ReceiverDepth = l_ShadowPosition.z + Frame.ShadowParams.y;
+
+    Texture2DArray<float> l_ShadowMap = ResourceDescriptorHeap[Frame.ShadowInfo.x];
+    SamplerComparisonState l_ShadowSampler = SamplerDescriptorHeap[k_SamplerShadow];
+
+    float l_Visibility = 0.0;
+    [unroll]
+    for (int l_Y = -1; l_Y <= 1; ++l_Y)
+    {
+        [unroll]
+        for (int l_X = -1; l_X <= 1; ++l_X)
+        {
+            l_Visibility += l_ShadowMap.SampleCmpLevelZero(l_ShadowSampler, float3(l_Uv, l_Cascade), l_ReceiverDepth, int2(l_X, l_Y));
+        }
+    }
+    l_Visibility /= 9.0;
+
+    const float l_Fade = saturate((l_ViewDepth - Frame.ShadowParams.z) / Frame.ShadowParams.w);
+
+    return lerp(l_Visibility, 1.0, l_Fade);
+}
+
 float4 PSMain(VertexOutput input) : SV_Target
 {
     StructuredBuffer<MaterialData> l_Materials = ResourceDescriptorHeap[Frame.FrameInfo.z];
@@ -110,7 +159,9 @@ float4 PSMain(VertexOutput input) : SV_Target
     const float3 l_Specular = DistributionGGX(l_NDotH, l_Alpha) * VisibilitySmithGGX(l_NDotV, l_NDotL, l_Alpha) * l_Fresnel;
     const float3 l_Diffuse = (1.0 - l_Fresnel) * (1.0 - l_Metallic) * l_BaseColor.rgb / k_Pi;
 
-    float3 l_Color = (l_Diffuse + l_Specular) * Frame.SunColor.rgb * l_NDotL;
+    const float l_Shadow = SampleSunShadow(input.WorldPosition, l_VertexNormal, l_NDotL);
+
+    float3 l_Color = (l_Diffuse + l_Specular) * Frame.SunColor.rgb * (l_NDotL * l_Shadow);
 
     // Flat ambient until the sky and IBL arrive at step 4; metals take it through F0 so they do not go black in shadow
     l_Color += Frame.AmbientColor.rgb * (l_BaseColor.rgb * (1.0 - l_Metallic) + l_F0 * l_Metallic);

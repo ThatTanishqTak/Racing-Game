@@ -133,6 +133,7 @@ powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/DebugLine.hlsl" v
 powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/DebugLine.hlsl" ps_6_0 PSMain)
 powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Forward.hlsl" vs_6_6 VSMain)
 powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Forward.hlsl" ps_6_6 PSMain)
+powertrain_compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Shadow.hlsl" vs_6_6 VSMain)
 
 add_custom_target(PowertrainShaders DEPENDS ${SHADER_OUTPUTS} SOURCES ${SHADERS})
 set_target_properties(PowertrainShaders PROPERTIES FOLDER "Utility")

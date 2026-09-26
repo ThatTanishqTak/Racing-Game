@@ -15,9 +15,10 @@ static const uint k_SamplerLinearWrap = 0;
 static const uint k_SamplerLinearClamp = 1;
 static const uint k_SamplerAnisotropicWrap = 2;
 static const uint k_SamplerPointClamp = 3;
-static const uint k_SamplerCount = 4;
-
+static const uint k_SamplerShadow = 4;
+static const uint k_SamplerCount = 5;
 static const uint k_MaterialFlagAlphaMask = 1;
+static const uint k_ShadowCascadeCount = 4;
 
 struct DrawConstants
 {
@@ -52,6 +53,12 @@ struct MaterialData
     uint EmissiveTexture;
 };
 
+struct ShadowPassConstants
+{
+    row_major float4x4 ViewProjection;
+    uint4 Cascade;
+};
+
 struct FrameConstants
 {
     row_major float4x4 View;
@@ -65,4 +72,10 @@ struct FrameConstants
     float4 ViewportSize;
     
     uint4 FrameInfo;
+
+    row_major float4x4 ShadowMatrices[k_ShadowCascadeCount];
+    float4 ShadowSplits;
+    float4 ShadowTexelSizes;
+    float4 ShadowParams;
+    uint4 ShadowInfo;
 };

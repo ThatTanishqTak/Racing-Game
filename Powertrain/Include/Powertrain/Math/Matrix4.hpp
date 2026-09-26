@@ -6,14 +6,6 @@
 
 namespace Powertrain
 {
-	// Convention, fixed by DebugLine.hlsl, DebugDrawPass and the Sandbox camera:
-	// - Row-major storage, M[row][column]; the same memory layout as DirectXMath's XMFLOAT4X4 and HLSL row_major, so the
-	//   matrix is uploaded raw and the shader reads it with mul(float4(p, 1), M)
-	// - Row vectors: points transform as v * M, and a * b applies a first, then b
-	// - Rows 0 to 2 hold the basis axes, row 3 holds the translation (M[3][0..2])
-	// - Right-handed, +Y up; the camera looks down -Z in view space
-	// - Perspective is reversed-Z with an infinite far plane: depth 1 at the near plane, falling towards 0 at infinity
-	// The heavy functions are implemented on DirectXMath in Matrix4.cpp; this header stays standard-library only.
 	struct Matrix4
 	{
 		float M[4][4] =
@@ -50,16 +42,10 @@ namespace Powertrain
 		static Matrix4 RotationY(float radians);
 		static Matrix4 RotationZ(float radians);
 		static Matrix4 FromQuaternion(const Quaternion& rotation);
-
-		// Scale, then rotate, then translate: the local-to-parent matrix of a transform
 		static Matrix4 TRS(const Vector3& translation, const Quaternion& rotation, const Vector3& scale);
-
-		// Right-handed view matrix; eye and target must differ
 		static Matrix4 LookAt(const Vector3& eye, const Vector3& target, const Vector3& up);
-
-		// Right-handed reversed-Z perspective with an infinite far plane. Depth is 1 at nearPlane and tends to 0 at infinity,
-		// so the depth buffer clears to 0 and the depth test is GREATER
 		static Matrix4 Perspective(float verticalFovRadians, float aspectRatio, float nearPlane);
+		static Matrix4 Orthographic(float width, float height, float nearPlane, float farPlane);
 
 		Matrix4 Transposed() const;
 

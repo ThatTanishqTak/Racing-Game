@@ -394,7 +394,7 @@ void SandboxLayer::DrawStatsPanel()
 		ImGui::PlotLines("##FrameTimes", m_FrameHistory.data(), static_cast<int>(k_FrameHistoryCount), static_cast<int>(m_FrameHistoryOffset), nullptr, 0.0f, 33.3f, ImVec2(240.0f, 60.0f));
 		ImGui::Separator();
 
-		ImGui::Text("Draw calls %u   Triangles %u", l_Stats.DrawCalls, l_Stats.Triangles);
+		ImGui::Text("Draw calls %u (%u shadow)   Triangles %u", l_Stats.DrawCalls, l_Stats.ShadowDrawCalls, l_Stats.Triangles);
 		ImGui::Text("Instances %u drawn, %u culled", l_Stats.Instances, l_Stats.CulledInstances);
 		ImGui::Text("Meshes %u   Textures %u   Materials %u   GPU %llu KB", l_Stats.Meshes, l_Stats.Textures, l_Stats.Materials, static_cast<unsigned long long>(l_Stats.GpuMemoryBytes / 1024));
 		ImGui::Text("Frame %llu", static_cast<unsigned long long>(l_Stats.FrameIndex));

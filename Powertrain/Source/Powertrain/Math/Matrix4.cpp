@@ -51,8 +51,6 @@ namespace Powertrain
 		PT_CORE_ASSERT(aspectRatio > 0.0f, "Aspect ratio must be positive");
 		PT_CORE_ASSERT(nearPlane > 0.0f, "Near plane must be positive");
 
-		// Row-vector form of the right-handed projection with the far plane taken to infinity and depth reversed:
-		// z_clip = nearPlane, w_clip = -z_view, so depth = nearPlane / -z_view is 1 at the near plane and tends to 0
 		const float l_YScale = 1.0f / std::tan(verticalFovRadians * 0.5f);
 		const float l_XScale = l_YScale / aspectRatio;
 
@@ -63,6 +61,23 @@ namespace Powertrain
 		l_Result.M[2][3] = -1.0f;
 		l_Result.M[3][2] = nearPlane;
 		l_Result.M[3][3] = 0.0f;
+
+		return l_Result;
+	}
+
+	Matrix4 Matrix4::Orthographic(float width, float height, float nearPlane, float farPlane)
+	{
+		PT_CORE_ASSERT(width > 0.0f && height > 0.0f, "Orthographic size {}x{} must be positive", width, height);
+		PT_CORE_ASSERT(farPlane > nearPlane, "Orthographic far plane {} must be beyond the near plane {}", farPlane, nearPlane);
+
+		// View space looks down -Z, so z_view = -nearPlane maps to depth 1 and z_view = -farPlane to depth 0
+		const float l_DepthScale = 1.0f / (farPlane - nearPlane);
+
+		Matrix4 l_Result;
+		l_Result.M[0][0] = 2.0f / width;
+		l_Result.M[1][1] = 2.0f / height;
+		l_Result.M[2][2] = l_DepthScale;
+		l_Result.M[3][2] = farPlane * l_DepthScale;
 
 		return l_Result;
 	}

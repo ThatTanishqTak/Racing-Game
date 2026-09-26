@@ -7,6 +7,7 @@
 #include "Powertrain/Renderer/Renderer.hpp"
 #include "Powertrain/Renderer/SceneRenderer.hpp"
 #include "Powertrain/Renderer/ShaderInterop.hpp"
+#include "Powertrain/Renderer/ShadowPass.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandList.hpp"
 #include "Powertrain/RHI/D3D12/D3D12CommandQueue.hpp"
 #include "Powertrain/RHI/D3D12/D3D12DeferredReleaseQueue.hpp"
@@ -17,6 +18,7 @@
 #include "Powertrain/RHI/D3D12/D3D12MaterialStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12MeshStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12PipelineCache.hpp"
+#include "Powertrain/RHI/D3D12/D3D12ShadowMap.hpp"
 #include "Powertrain/RHI/D3D12/D3D12SwapChain.hpp"
 #include "Powertrain/RHI/D3D12/D3D12TextureStorage.hpp"
 #include "Powertrain/RHI/D3D12/D3D12UploadRing.hpp"
@@ -95,6 +97,7 @@ namespace Powertrain
 		D3D12UploadRing& GetUploadRing() { return m_UploadRing; }
 		D3D12PipelineCache& GetPipelineCache() { return m_PipelineCache; }
 		D3D12DepthBuffer& GetDepthBuffer() { return m_DepthBuffer; }
+		D3D12ShadowMap& GetShadowMap() { return m_ShadowMap; }
 		D3D12MeshStorage& GetMeshStorage() { return m_Meshes; }
 		const D3D12MeshStorage& GetMeshStorage() const { return m_Meshes; }
 		D3D12TextureStorage& GetTextureStorage() { return m_Textures; }
@@ -112,6 +115,7 @@ namespace Powertrain
 		bool ApplyPendingResize();
 		bool CreateSamplers();
 		void DestroySamplers();
+		void BindSceneTargets(ID3D12GraphicsCommandList* commandList);
 
 	private:
 		D3D12Device m_Device;
@@ -126,6 +130,7 @@ namespace Powertrain
 		D3D12DeferredReleaseQueue m_DeferredRelease;
 		D3D12GpuTimer m_GpuTimer;
 		D3D12DepthBuffer m_DepthBuffer;
+		D3D12ShadowMap m_ShadowMap;
 		D3D12UploadRing m_UploadRing;
 		D3D12PipelineCache m_PipelineCache;
 		D3D12MeshStorage m_Meshes;
@@ -133,6 +138,7 @@ namespace Powertrain
 		D3D12MaterialStorage m_Materials;
 		std::array<DescriptorHandle, ShaderInterop::k_SamplerCount> m_Samplers;
 		SceneRenderer m_SceneRenderer;
+		ShadowPass m_ShadowPass;
 		ForwardPass m_ForwardPass;
 		DebugDrawPass m_DebugDrawPass;
 		ImGuiPass m_ImGuiPass;

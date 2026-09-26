@@ -21,11 +21,10 @@ namespace Powertrain
 		AlphaBlend
 	};
 
-	// Everything a graphics PSO needs beyond the global root signature. Shaders are named by their .cso stem, "Forward.VSMain".
 	struct GraphicsPipelineDescription
 	{
 		std::string VertexShader;
-		// Empty for depth-only passes
+
 		std::string PixelShader;
 
 		std::array<DXGI_FORMAT, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT> RenderTargetFormats = {};
@@ -36,12 +35,15 @@ namespace Powertrain
 		D3D12_PRIMITIVE_TOPOLOGY_TYPE Topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 		D3D12_CULL_MODE CullMode = D3D12_CULL_MODE_BACK;
 		D3D12_FILL_MODE FillMode = D3D12_FILL_MODE_SOLID;
-		// Right-handed with glTF winding: counter-clockwise faces are front faces
+
 		bool FrontCounterClockwise = true;
+
+		int32_t DepthBias = 0;
+		float SlopeScaledDepthBias = 0.0f;
 
 		bool DepthTest = false;
 		bool DepthWrite = false;
-		// Reversed-Z: nearer is greater
+
 		D3D12_COMPARISON_FUNC DepthFunction = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
 
 		BlendMode Blend = BlendMode::Opaque;
@@ -49,12 +51,9 @@ namespace Powertrain
 		bool operator==(const GraphicsPipelineDescription&) const = default;
 	};
 
-	// Owns the one bindless root signature every pass shares and the PSOs built on it, keyed by their description so a
-	// pass asks for what it needs and gets the same object back on every later request. Shader bytecode is cached too.
 	class D3D12PipelineCache
 	{
 	public:
-		// Root parameter slots, fixed by the root signature and mirrored by the register numbers in ShaderInterop.hlsli
 		static constexpr uint32_t k_DrawConstantsParameter = 0;
 		static constexpr uint32_t k_FrameConstantsParameter = 1;
 		static constexpr uint32_t k_PassConstantsParameter = 2;
@@ -69,10 +68,8 @@ namespace Powertrain
 		bool Initialize(D3D12Device& device, const std::filesystem::path& shaderDirectory);
 		void Shutdown();
 
-		// Null on a missing shader or a rejected description, both already logged; the cache keeps ownership
 		ID3D12PipelineState* GetGraphicsPipeline(const GraphicsPipelineDescription& description);
 
-		// Bytecode of "<name>.cso" from the shader directory, read once; null when the file is missing
 		const std::vector<uint8_t>* GetShader(std::string_view name);
 
 		ID3D12RootSignature* GetRootSignature() const { return m_RootSignature.Get(); }

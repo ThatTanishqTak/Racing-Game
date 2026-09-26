@@ -99,6 +99,7 @@ namespace Powertrain
 		double GpuFrameMilliseconds = 0.0;
 		uint32_t DrawCalls = 0;
 		uint32_t Triangles = 0;
+		uint32_t ShadowDrawCalls = 0;
 		uint32_t Instances = 0;
 		uint32_t CulledInstances = 0;
 		uint32_t Meshes = 0;

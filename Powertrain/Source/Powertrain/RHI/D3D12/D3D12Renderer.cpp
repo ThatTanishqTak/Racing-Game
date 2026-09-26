@@ -25,6 +25,12 @@ namespace Powertrain
 		// GPU timer slots; 0 is the frame, 1 the debug lines, the scene passes take 2 onward
 		constexpr uint32_t k_DebugDrawTimer = 1;
 		constexpr uint32_t k_ForwardTimer = 2;
+		constexpr uint32_t k_ShadowTimer = 3;
+
+		// Receiver-side shadow bias: how many texels to push along the normal, the constant depth bias in cascade depth units, and the fade over the last stretch of the far cascade
+		constexpr float k_ShadowNormalOffsetTexels = 1.5f;
+		constexpr float k_ShadowDepthBias = 0.0002f;
+		constexpr float k_ShadowFadeLength = 50.0f;
 
 		// Flat ambient as a fraction of the sun's brightest channel, tinted by the sky, until IBL replaces it at step 4
 		constexpr float k_AmbientFraction = 0.12f;
@@ -103,6 +109,11 @@ namespace Powertrain
 			return false;
 		}
 
+		if (!m_ShadowMap.Initialize(m_Device, m_DsvHeap, m_ResourceHeap))
+		{
+			return false;
+		}
+
 		if (!m_UploadRing.Initialize(m_Device, k_UploadRingBytesPerFrame, "Upload Ring"))
 		{
 			return false;
@@ -139,6 +150,11 @@ namespace Powertrain
 		}
 
 		// Passes in frame order
+		if (!m_ShadowPass.Initialize(*this))
+		{
+			return false;
+		}
+
 		if (!m_ForwardPass.Initialize(*this))
 		{
 			return false;
@@ -198,6 +214,7 @@ namespace Powertrain
 		m_ImGuiPass.Shutdown();
 		m_DebugDrawPass.Shutdown();
 		m_ForwardPass.Shutdown();
+		m_ShadowPass.Shutdown();
 		m_SceneRenderer.Shutdown();
 		DestroySamplers();
 		m_Materials.Shutdown();
@@ -205,6 +222,7 @@ namespace Powertrain
 		m_Meshes.Shutdown();
 		m_PipelineCache.Shutdown();
 		m_UploadRing.Shutdown();
+		m_ShadowMap.Shutdown();
 		m_DepthBuffer.Shutdown();
 		m_SwapChain.Shutdown();
 		m_SamplerHeap.Shutdown();
@@ -285,22 +303,11 @@ namespace Powertrain
 		l_List->ResourceBarrier(1, &l_ToRenderTarget);
 
 		// Colour and depth stay bound through the scene and the debug lines; EndImGuiFrame drops the depth for the UI
-		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
-		const D3D12_CPU_DESCRIPTOR_HANDLE l_Dsv = m_DepthBuffer.GetDsv();
+		BindSceneTargets(l_List);
+
 		const float l_Clear[4] = { m_ClearColor.R, m_ClearColor.G, m_ClearColor.B, m_ClearColor.A };
-		l_List->OMSetRenderTargets(1, &l_Rtv, FALSE, &l_Dsv);
-		l_List->ClearRenderTargetView(l_Rtv, l_Clear, 0, nullptr);
+		l_List->ClearRenderTargetView(m_SwapChain.GetCurrentRtv(), l_Clear, 0, nullptr);
 		m_DepthBuffer.Clear(l_List);
-
-		D3D12_VIEWPORT l_Viewport = {};
-		l_Viewport.Width = static_cast<float>(m_SwapChain.GetWidth());
-		l_Viewport.Height = static_cast<float>(m_SwapChain.GetHeight());
-		l_Viewport.MinDepth = 0.0f;
-		l_Viewport.MaxDepth = 1.0f;
-		l_List->RSSetViewports(1, &l_Viewport);
-
-		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
-		l_List->RSSetScissorRects(1, &l_Scissor);
 
 		m_FrameDrawCalls = 0;
 		m_FrameTriangles = 0;
@@ -415,19 +422,47 @@ namespace Powertrain
 		l_FrameConstants.FrameInfo.X = static_cast<uint32_t>(m_Stats.FrameIndex);
 		l_FrameConstants.FrameInfo.Y = m_SceneRenderer.GetInstanceBufferIndex();
 		l_FrameConstants.FrameInfo.Z = l_MaterialTableIndex;
+
+		// Shadow constants: cascade matrices, where each ends, how big its texels are, and the receiver bias
+		const std::span<const ShadowCascade> l_Cascades = m_SceneRenderer.GetShadowCascades();
+		float l_Splits[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		float l_TexelSizes[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		for (size_t l_Index = 0; l_Index < l_Cascades.size(); ++l_Index)
+		{
+			l_FrameConstants.ShadowMatrices[l_Index] = l_Cascades[l_Index].ViewProjection;
+			l_Splits[l_Index] = l_Cascades[l_Index].SplitDistance;
+			l_TexelSizes[l_Index] = l_Cascades[l_Index].TexelWorldSize;
+		}
+		const float l_ShadowFar = l_Cascades.empty() ? 0.0f : l_Cascades.back().SplitDistance;
+		l_FrameConstants.ShadowSplits = { l_Splits[0], l_Splits[1], l_Splits[2], l_Splits[3] };
+		l_FrameConstants.ShadowTexelSizes = { l_TexelSizes[0], l_TexelSizes[1], l_TexelSizes[2], l_TexelSizes[3] };
+		l_FrameConstants.ShadowParams = { k_ShadowNormalOffsetTexels, k_ShadowDepthBias, l_ShadowFar - k_ShadowFadeLength, k_ShadowFadeLength };
+		l_FrameConstants.ShadowInfo.X = m_ShadowMap.GetShaderResourceIndex();
+		l_FrameConstants.ShadowInfo.Y = static_cast<uint32_t>(l_Cascades.size());
+		l_FrameConstants.ShadowInfo.Z = D3D12ShadowMap::k_Size;
 		m_FrameConstantsAddress = m_UploadRing.Upload(l_FrameConstants).Gpu;
 
 		// Without a material table the shader would index past the heap, so the frame draws nothing rather than faulting
-		const std::span<const DrawBatch> l_Batches = l_MaterialTableIndex != UINT32_MAX ? m_SceneRenderer.GetBatches() : std::span<const DrawBatch>();
+		const bool l_CanDraw = l_MaterialTableIndex != UINT32_MAX;
+		const std::span<const DrawBatch> l_Batches = l_CanDraw ? m_SceneRenderer.GetBatches() : std::span<const DrawBatch>();
+		const std::span<const ShadowCascade> l_ShadowCascades = l_CanDraw ? l_Cascades : std::span<const ShadowCascade>();
 
 		ID3D12GraphicsCommandList* l_List = m_CommandList.GetHandle();
+
+		// Shadows first, into their own depth slices; then the swap chain targets come back for the forward pass
+		m_GpuTimer.Begin(l_List, k_ShadowTimer);
+		m_ShadowPass.Render(l_List, m_ShadowMap, m_UploadRing, m_FrameConstantsAddress, l_ShadowCascades);
+		m_GpuTimer.End(l_List, k_ShadowTimer);
+
+		BindSceneTargets(l_List);
 
 		m_GpuTimer.Begin(l_List, k_ForwardTimer);
 		m_ForwardPass.Render(l_List, m_FrameConstantsAddress, l_Batches);
 		m_GpuTimer.End(l_List, k_ForwardTimer);
 
-		m_FrameDrawCalls += m_ForwardPass.GetDrawCallCount();
-		m_FrameTriangles += m_ForwardPass.GetTriangleCount();
+		m_FrameDrawCalls += m_ShadowPass.GetDrawCallCount() + m_ForwardPass.GetDrawCallCount();
+		m_FrameTriangles += m_ShadowPass.GetTriangleCount() + m_ForwardPass.GetTriangleCount();
+		m_Stats.ShadowDrawCalls = m_ShadowPass.GetDrawCallCount();
 		m_Stats.Instances = m_SceneRenderer.GetVisibleInstanceCount();
 		m_Stats.CulledInstances = m_SceneRenderer.GetCulledInstanceCount();
 		m_Stats.Meshes = m_Meshes.GetAliveCount();
@@ -600,6 +635,24 @@ namespace Powertrain
 		m_Materials.Destroy(material);
 	}
 
+	void D3D12Renderer::BindSceneTargets(ID3D12GraphicsCommandList* commandList)
+	{
+		// Colour and depth stay bound through the scene and the debug lines; EndImGuiFrame drops the depth for the UI
+		const D3D12_CPU_DESCRIPTOR_HANDLE l_Rtv = m_SwapChain.GetCurrentRtv();
+		const D3D12_CPU_DESCRIPTOR_HANDLE l_Dsv = m_DepthBuffer.GetDsv();
+		commandList->OMSetRenderTargets(1, &l_Rtv, FALSE, &l_Dsv);
+
+		D3D12_VIEWPORT l_Viewport = {};
+		l_Viewport.Width = static_cast<float>(m_SwapChain.GetWidth());
+		l_Viewport.Height = static_cast<float>(m_SwapChain.GetHeight());
+		l_Viewport.MinDepth = 0.0f;
+		l_Viewport.MaxDepth = 1.0f;
+		commandList->RSSetViewports(1, &l_Viewport);
+
+		const D3D12_RECT l_Scissor = { 0, 0, static_cast<LONG>(m_SwapChain.GetWidth()), static_cast<LONG>(m_SwapChain.GetHeight()) };
+		commandList->RSSetScissorRects(1, &l_Scissor);
+	}
+
 	bool D3D12Renderer::CreateSamplers()
 	{
 		std::array<D3D12_SAMPLER_DESC, ShaderInterop::k_SamplerCount> l_Descriptions = {};
@@ -633,6 +686,13 @@ namespace Powertrain
 		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
 		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
 		l_Descriptions[ShaderInterop::k_SamplerPointClamp].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+		// PCF taps: bilinear comparison, lit when the receiver's depth is at or above the stored depth under reversed-Z
+		l_Descriptions[ShaderInterop::k_SamplerShadow].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+		l_Descriptions[ShaderInterop::k_SamplerShadow].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerShadow].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerShadow].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		l_Descriptions[ShaderInterop::k_SamplerShadow].ComparisonFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
 
 		// The shaders index the heap with the ShaderInterop constants, so these must be the first slots the heap hands out
 		for (uint32_t l_Index = 0; l_Index < ShaderInterop::k_SamplerCount; ++l_Index)

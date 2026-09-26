@@ -60,6 +60,8 @@ namespace Powertrain
 		HashValue(l_Hash, description.CullMode);
 		HashValue(l_Hash, description.FillMode);
 		HashValue(l_Hash, description.FrontCounterClockwise);
+		HashValue(l_Hash, description.DepthBias);
+		HashValue(l_Hash, description.SlopeScaledDepthBias);
 		HashValue(l_Hash, description.DepthTest);
 		HashValue(l_Hash, description.DepthWrite);
 		HashValue(l_Hash, description.DepthFunction);
@@ -154,6 +156,9 @@ namespace Powertrain
 		l_Pipeline.RasterizerState.FillMode = description.FillMode;
 		l_Pipeline.RasterizerState.CullMode = description.CullMode;
 		l_Pipeline.RasterizerState.FrontCounterClockwise = description.FrontCounterClockwise ? TRUE : FALSE;
+		l_Pipeline.RasterizerState.DepthBias = description.DepthBias;
+		l_Pipeline.RasterizerState.DepthBiasClamp = 0.0f;
+		l_Pipeline.RasterizerState.SlopeScaledDepthBias = description.SlopeScaledDepthBias;
 		l_Pipeline.RasterizerState.DepthClipEnable = TRUE;
 		l_Pipeline.RasterizerState.MultisampleEnable = description.SampleCount > 1 ? TRUE : FALSE;
 		l_Pipeline.RasterizerState.AntialiasedLineEnable = FALSE;

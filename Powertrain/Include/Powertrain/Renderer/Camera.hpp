@@ -18,7 +18,7 @@ namespace Powertrain
 
 	struct Frustum
 	{
-		static constexpr size_t k_PlaneCount = 5;
+		static constexpr size_t k_PlaneCount = 6;
 
 		std::array<Plane, k_PlaneCount> Planes;
 
@@ -40,7 +40,8 @@ namespace Powertrain
 				l_W - l_X,
 				l_W + l_Y,
 				l_W - l_Y,
-				l_W - l_Z
+				l_W - l_Z,
+				l_Z
 			};
 
 			Frustum l_Result;
@@ -81,6 +82,8 @@ namespace Powertrain
 		Matrix4 ViewProjection;
 		Vector3 Position;
 		float NearPlane = 0.1f;
+		float VerticalFov = Math::ToRadians(60.0f);
+		float AspectRatio = 1.0f;
 		Frustum Frustum;
 	};
 }
